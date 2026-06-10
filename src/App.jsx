@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import './App.css';
 import ObjectCard from './components/ObjectCard';
 import EnvCard from './components/EnvCard';
-import IdeCard from './components/IdeCard';
 import Toast from './components/Toast';
 import InstallModal from './components/InstallModal';
 
@@ -996,13 +995,6 @@ function App() {
           <button className="launch-btn" onClick={() => handleAction(selected)}>
             {LAUNCH_LABELS[selected]}
           </button>
-
-          <div className="section-label" style={{ marginTop: 28 }}>Interactive environments</div>
-          <div className="env-grid">
-            <IdeCard tool="jupyter" />
-            <IdeCard tool="rstudio" />
-            <IdeCard tool="vscode" />
-          </div>
         </>
       )}
 
