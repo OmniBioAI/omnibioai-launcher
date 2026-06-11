@@ -10,6 +10,10 @@ const TOKEN = process.env.REACT_APP_OMNIBIOAI_TOKEN || 'dev';
 const JUPYTER_BASE = process.env.REACT_APP_JUPYTER_BASE || 'http://127.0.0.1:8890';
 const JUPYTER_TOKEN = process.env.REACT_APP_JUPYTER_TOKEN || 'devtoken';
 const USE_MOCK = process.env.REACT_APP_USE_MOCK === 'true';
+const HOST_IP = (() => {
+  try { return new URL(process.env.REACT_APP_OMNIBIOAI_BASE_URL || '').hostname; }
+  catch { return '192.168.86.234'; }
+})();
 const PAGE_SIZE = 20;
 
 // ── Mock data ─────────────────────────────────────────────────────────
@@ -78,8 +82,8 @@ function shouldUseMock(id) { return USE_MOCK || id === 'test'; }
 
 const LAUNCH_LABELS = {
   notebook: 'Open in JupyterLab',
-  vscode:   'Copy env vars to clipboard',
-  r:        'Download R script + open RStudio',
+  vscode:   'Open in VS Code Server',
+  r:        'Open in RStudio',
 };
 
 // ── Group builder ─────────────────────────────────────────────────────
@@ -862,17 +866,8 @@ function App() {
       .catch(() => setLoading(false));
   }, []);
 
-  const notebookUrl = `${JUPYTER_BASE}/lab?token=${JUPYTER_TOKEN}&omnibioai_object_id=${objectId}`;
-
-  const envVarSnippet =
-    `export OMNIBIOAI_OBJECT_ID="${objectId}"\n` +
-    `export OMNIBIOAI_BASE_URL="${BASE_URL}"\n` +
-    `export OMNIBIOAI_TOKEN="${TOKEN}"\n\n` +
-    `# Paste in terminal, then:\n` +
-    `from omnibioai_sdk import OmniClient\nimport os\n` +
-    `c = OmniClient()\n` +
-    `obj = c.object_get(os.environ["OMNIBIOAI_OBJECT_ID"])\n` +
-    `print(obj["object_type"], obj["metadata"])`;
+  const jupyterHost = (() => { try { return new URL(JUPYTER_BASE).hostname || HOST_IP; } catch { return HOST_IP; } })();
+  const notebookUrl = `http://${jupyterHost}:8888?token=${JUPYTER_TOKEN}&omnibioai_object_id=${objectId}`;
 
   const buildRScript = () => {
     const name = obj?.name || obj?.object_type || 'Unknown';
@@ -901,21 +896,9 @@ function App() {
     if (type === 'notebook') {
       window.open(notebookUrl, '_blank');
     } else if (type === 'vscode') {
-      navigator.clipboard.writeText(envVarSnippet)
-        .then(() => showToast('Env vars copied — paste in your VS Code terminal'))
-        .catch(() => showToast('Copy failed — check browser clipboard permissions'));
+      window.open(`http://${HOST_IP}:8083`, '_blank');
     } else if (type === 'r') {
-      downloadRScript();
-      fetch(`${BASE_URL}/api/dev/launch/rstudio/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
-        body: JSON.stringify({ object_id: objectId }),
-      })
-        .then((r) => r.json())
-        .then((data) => {
-          showToast(data.ok ? 'RStudio launched with R script' : 'R script downloaded — open manually in RStudio');
-        })
-        .catch(() => showToast('R script downloaded — open manually in RStudio'));
+      window.open(`http://${HOST_IP}:8787`, '_blank');
     }
   };
 
@@ -986,15 +969,28 @@ function App() {
               description="JupyterLab with object context preloaded"
               selected={selected === 'notebook'} onClick={() => handleCardClick('notebook')} />
             <EnvCard type="vscode" title="VS Code"
-              description="Copy env vars — paste in VS Code terminal"
+              description="Open VS Code Server in browser"
               selected={selected === 'vscode'} onClick={() => handleCardClick('vscode')} />
             <EnvCard type="r" title="R / RStudio"
-              description="Download R script + launch RStudio"
+              description="Open RStudio Server in browser"
               selected={selected === 'r'} onClick={() => handleCardClick('r')} />
           </div>
           <button className="launch-btn" onClick={() => handleAction(selected)}>
             {LAUNCH_LABELS[selected]}
           </button>
+          {selected === 'r' && (
+            <div style={{ textAlign: 'center', marginTop: 8 }}>
+              <button
+                onClick={downloadRScript}
+                style={{
+                  background: 'none', border: 'none', fontSize: 12,
+                  color: '#6b7280', cursor: 'pointer', textDecoration: 'underline',
+                }}
+              >
+                Download R starter script
+              </button>
+            </div>
+          )}
         </>
       )}
 
