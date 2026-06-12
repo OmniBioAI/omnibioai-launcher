@@ -828,6 +828,22 @@ function App() {
   const [toast, setToast]                   = useState(null);
   const [modal, setModal]                   = useState(null);
 
+  const openUrl = (url) => {
+    console.log('[Launcher] openUrl called with:', url);
+    if (window.require) {
+      try {
+        const { ipcRenderer } = window.require('electron');
+        console.log('[Launcher] using ipcRenderer.sendToHost');
+        ipcRenderer.sendToHost('open-external', url);
+        return;
+      } catch(e) {
+        console.log('[Launcher] ipcRenderer failed:', e.message);
+      }
+    }
+    console.log('[Launcher] using postMessage fallback');
+    window.parent.postMessage({ type: 'open-external', url }, '*');
+  };
+
   const objectId = urlObjectId || selectedObject?.object_id || null;
 
   useEffect(() => {
@@ -894,11 +910,11 @@ function App() {
 
   const handleAction = (type) => {
     if (type === 'notebook') {
-      window.open(notebookUrl, '_blank');
+      openUrl(notebookUrl);
     } else if (type === 'vscode') {
-      window.open(`http://${HOST_IP}:8083`, '_blank');
+      openUrl(`http://${HOST_IP}:8083`);
     } else if (type === 'r') {
-      window.open(`http://${HOST_IP}:8787`, '_blank');
+      openUrl(`http://${HOST_IP}:8787`);
     }
   };
 
