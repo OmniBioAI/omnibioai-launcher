@@ -33,6 +33,25 @@ Object Launch works with any running JupyterLab instance.
 
 ---
 
+## Running in OmniBioAI Stack (recommended)
+
+The Launcher is managed automatically by OmniBioAI Studio.
+No manual startup required — it starts with the full stack:
+
+```bash
+cd ~/Desktop/machine/omnibioai-studio
+docker compose up -d launcher
+```
+
+Access at: `http://localhost/_svc/sdk` (via nginx, JWT required)
+Direct access (localhost only): `http://localhost:5190`
+
+The Launcher backend API runs on port 3001 internally.
+IDE container lifecycle (start/stop/status) is handled via
+the Docker socket — no additional configuration needed.
+
+---
+
 ## Quick Start — IDE Services
 
 The fastest way to get all three environments running locally:
@@ -46,9 +65,9 @@ docker-compose up -d
 
 | Service | URL | Default credential |
 |---|---|---|
-| JupyterLab | http://localhost:8888 | token: `omnibioai` |
-| RStudio | http://localhost:8787 | password: `omnibioai` |
-| VS Code Server | http://localhost:8080 | password: `omnibioai` |
+| JupyterLab     | http://localhost:8888 | token: `$JUPYTER_TOKEN` (set in .env)    |
+| RStudio        | http://localhost:8787 | password: `$RSTUDIO_PASSWORD` (set in .env) |
+| VS Code Server | http://localhost:8080 | password: `$VSCODE_PASSWORD` (set in .env)  |
 
 Stop all services:
 
@@ -147,6 +166,17 @@ The `IdeCard` component in the Launcher UI polls `GET /api/launcher/status/{tool
 container reports `running`, then opens the service URL in a new tab. A **Stop** button
 appears while the container is running.
 
+### OmniBioAI nginx routing
+
+In production the Launcher is accessed via nginx:
+
+```
+http://localhost/_svc/sdk  →  launcher:5190  (JWT required)
+```
+
+The `/api/launcher/*` endpoints are proxied to the Express backend
+on port 3001 inside the container.
+
 ---
 
 ## API Endpoints
@@ -222,6 +252,10 @@ done
 | `OMNIBIOAI_DATA_DIR` | `./data` | Host path mounted as `/data` in all containers |
 | `OMNIBIOAI_WORK_DIR` | `./work` | Host path mounted as `/work` in all containers |
 
+> **Security note:** `JUPYTER_TOKEN`, `RSTUDIO_PASSWORD`, and
+> `VSCODE_PASSWORD` default to `omnibioai`. Change these in
+> `omnibioai-studio/.env` before production use.
+
 ---
 
 ## Development
@@ -295,6 +329,18 @@ omnibioai-launcher/
 ├── nginx.conf
 └── Dockerfile                  — Launcher UI (React → nginx)
 ```
+
+---
+
+## Related Services
+
+| Service | Role |
+|---------|------|
+| `omnibioai-studio` | Manages Launcher container lifecycle |
+| `omnibioai` | Workbench backend — object registry API |
+| `omnibioai-api-gateway` | JWT enforcement on `/_svc/sdk` |
+| `omnibioai-control-center` | Health monitoring (launcher:5190) |
+| `omnibioai-sdk` | Python SDK client — programmatic alternative to Launcher UI |
 
 ---
 
