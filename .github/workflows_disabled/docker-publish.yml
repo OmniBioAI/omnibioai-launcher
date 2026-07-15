@@ -41,7 +41,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/man4ish/omnibioai-launcher
+          images: ghcr.io/omnibioai/omnibioai-launcher
           tags: |
             # branch push → latest
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
@@ -63,8 +63,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/man4ish/omnibioai-launcher:buildcache
-          cache-to: type=registry,ref=ghcr.io/man4ish/omnibioai-launcher:buildcache,mode=max
+          cache-from: type=registry,ref=ghcr.io/omnibioai/omnibioai-launcher:buildcache
+          cache-to: type=registry,ref=ghcr.io/omnibioai/omnibioai-launcher:buildcache,mode=max
 
       - name: Make package public
         env:

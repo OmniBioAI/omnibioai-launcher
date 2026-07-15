@@ -209,9 +209,9 @@ All requests carry `Authorization: Bearer <token>`.
 Pre-built images are published to the GitHub Container Registry:
 
 ```
-ghcr.io/man4ish/omnibioai-jupyter:1.0
-ghcr.io/man4ish/omnibioai-rstudio:1.0
-ghcr.io/man4ish/omnibioai-vscode:1.0
+ghcr.io/omnibioai/omnibioai-jupyter:1.0
+ghcr.io/omnibioai/omnibioai-rstudio:1.0
+ghcr.io/omnibioai/omnibioai-vscode:1.0
 ```
 
 To rebuild and push:
@@ -222,9 +222,9 @@ echo $CR_PAT | docker login ghcr.io -u man4ish --password-stdin
 
 for tool in jupyter rstudio vscode; do
   docker build \
-    -t ghcr.io/man4ish/omnibioai-${tool}:1.0 \
+    -t ghcr.io/omnibioai/omnibioai-${tool}:1.0 \
     -f docker/${tool}/Dockerfile docker/${tool}/
-  docker push ghcr.io/man4ish/omnibioai-${tool}:1.0
+  docker push ghcr.io/omnibioai/omnibioai-${tool}:1.0
 done
 ```
 
