@@ -865,8 +865,6 @@ function App() {
       .catch((err) => { setFetchError(err.message); setLoading(false); });
   }, [objectId, selectedObject]);
 
-  const showToast = (msg) => { setToast(null); setTimeout(() => setToast(msg), 10); };
-
   const openObject = useCallback((id) => {
     setLoading(true);
     fetch(`${BASE_URL}/api/dev/objects/${id}/`, {
