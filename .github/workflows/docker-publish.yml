@@ -51,7 +51,7 @@ jobs:
           labels: |
             org.opencontainers.image.title=OmniBioAI Launcher
             org.opencontainers.image.description=React-based launcher UI for the OmniBioAI platform
-            org.opencontainers.image.source=https://github.com/man4ish/omnibioai-launcher
+            org.opencontainers.image.source=https://github.com/OmniBioAI/omnibioai-launcher
             org.opencontainers.image.licenses=MIT
 
       - name: Build and push
@@ -78,7 +78,7 @@ jobs:
           gh api \
             --method PATCH \
             -H "Accept: application/vnd.github+json" \
-            /orgs/man4ish/packages/container/omnibioai-launcher \
+            /orgs/OmniBioAI/packages/container/omnibioai-launcher \
             -f visibility=public \
             2>/dev/null || \
           gh api \
