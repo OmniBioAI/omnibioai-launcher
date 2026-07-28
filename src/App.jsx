@@ -825,7 +825,7 @@ function App() {
   const [loading, setLoading]               = useState(false);
   const [fetchError, setFetchError]         = useState(null);
   const [selected, setSelected]             = useState('notebook');
-  const [toast, setToast]                   = useState(null);
+  const [toast]                              = useState(null);
   const [modal, setModal]                   = useState(null);
 
   const openUrl = (url) => {
