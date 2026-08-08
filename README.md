@@ -5,7 +5,7 @@ The launcher operates in two independent modes: opening a specific registry obje
 preferred IDE, and starting/stopping long-running IDE services backed by Docker containers.
 
 This repository is intentionally separate from
-[omnibioai-sdk](https://github.com/man4ish/omnibioai_sdk), the pure Python API client.
+[omnibioai-sdk](https://github.com/OmniBioAI/omnibioai-sdk), the pure Python API client.
 The launcher is the browser entry point; the SDK is for programmatic use inside notebooks
 and scripts.
 
@@ -58,7 +58,7 @@ The fastest way to get all three environments running locally:
 
 ```bash
 # Clone and start
-git clone https://github.com/man4ish/omnibioai-launcher.git
+git clone https://github.com/OmniBioAI/omnibioai-launcher.git
 cd omnibioai-launcher
 docker-compose up -d
 ```
@@ -323,6 +323,9 @@ omnibioai-launcher/
 │       └── Toast.jsx           — Ephemeral status notification
 ├── public/
 │   └── index.html
+├── server.js                    — Express backend (port 3001): /api/launcher/*
+│                                  (Docker socket container lifecycle) and
+│                                  /api/dev/* (object registry proxy)
 ├── docker-compose.yml          — IDE services orchestration
 ├── .env.example
 ├── package.json
