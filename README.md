@@ -1,5 +1,7 @@
 # OmniBioAI Launcher
 
+> README last reviewed: **2026-08-24**
+
 A browser-based gateway to interactive analysis environments for the OmniBioAI platform.
 The launcher operates in two independent modes: opening a specific registry object in your
 preferred IDE, and starting/stopping long-running IDE services backed by Docker containers.
@@ -29,7 +31,7 @@ Object Launch works with any running JupyterLab instance.
 |---|---|---|
 | **JupyterLab** | Full bioinformatics kernel (scanpy, DESeq2, scVelo, cellxgene …) | 8888 |
 | **RStudio** | R with Bioconductor — Seurat, DESeq2, scran, monocle3, tidyverse | 8787 |
-| **VS Code Server** | Python + R + Nextflow + WDL extensions, all packages from above | 8080 |
+| **VS Code Server** | Python + R + Nextflow + WDL extensions, all packages from above | 8083 |
 
 ---
 
@@ -52,34 +54,30 @@ the Docker socket — no additional configuration needed.
 
 ---
 
-## Quick Start — IDE Services
+## Studio-managed IDE services
 
-The fastest way to get all three environments running locally:
+The supported full-stack deployment is managed by OmniBioAI Studio. Studio
+owns the IDE containers and supplies the Docker socket access required by the
+Launcher lifecycle API.
 
 ```bash
-# Clone and start
-git clone https://github.com/OmniBioAI/omnibioai-launcher.git
-cd omnibioai-launcher
-docker-compose up -d
+cd ~/Desktop/machine/omnibioai-studio
+docker compose up -d launcher
 ```
 
 | Service | URL | Default credential |
 |---|---|---|
 | JupyterLab     | http://localhost:8888 | token: `$JUPYTER_TOKEN` (set in .env)    |
 | RStudio        | http://localhost:8787 | password: `$RSTUDIO_PASSWORD` (set in .env) |
-| VS Code Server | http://localhost:8080 | password: `$VSCODE_PASSWORD` (set in .env)  |
+| VS Code Server | http://localhost:8083 | password: `$VSCODE_PASSWORD` (set in .env)  |
 
-Stop all services:
+The Launcher container exposes its browser UI on port `5190` and its internal
+Express lifecycle API on port `3001`. The API is reached through nginx at
+`/api/launcher/*`; port `3001` is not the public UI port.
 
-```bash
-docker-compose down
-```
-
-Override credentials or data paths with environment variables:
-
-```bash
-JUPYTER_TOKEN=mysecret OMNIBIOAI_DATA_DIR=/data/myproject docker-compose up -d
-```
+Change `JUPYTER_TOKEN`, `RSTUDIO_PASSWORD`, `VSCODE_PASSWORD`, and data/work
+directory variables in the Studio environment before deployment. Do not use
+the development defaults in a shared or production environment.
 
 ---
 
@@ -90,17 +88,30 @@ The Launcher UI is a React single-page app served on port 5190.
 **With a running backend:**
 
 ```bash
-cp .env.example .env    # fill in REACT_APP_OMNIBIOAI_BASE_URL and token
 npm install
+REACT_APP_OMNIBIOAI_BASE_URL=http://127.0.0.1:8000 \
+REACT_APP_OMNIBIOAI_TOKEN=dev \
 npm start               # dev server at http://localhost:3000
 ```
+
+Create a local `.env.local` instead if you do not want to put credentials in
+the shell command. This repository does not currently include a committed
+`.env.example` file.
 
 **Via Docker:**
 
 ```bash
 docker build -t omnibioai-launcher .
-docker run -p 5190:5190 omnibioai-launcher
+docker run \
+  -p 5190:5190 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  omnibioai-launcher
 ```
+
+The Docker socket mount is required only for IDE Services start/stop/status
+operations. It grants the container substantial control over the host Docker
+daemon; omit the lifecycle API or use the Studio-managed deployment when that
+trust boundary is not acceptable.
 
 **Direct link from any page:**
 
@@ -155,7 +166,7 @@ Launcher UI  (React, port 5190)
   │  (registry object context)   │  (container lifecycle)
   └───┬──────────────────────────┘
       |                                  |
-  Open object in:               docker-compose up/down
+  Open object in:               browser / desktop host
   - JupyterLab  (URL + token)   GET  /api/launcher/status/{tool}
   - VS Code     (env var copy)  POST /api/launcher/start/{tool}
   - RStudio     (.R download)   POST /api/launcher/stop/{tool}
@@ -164,7 +175,8 @@ Launcher UI  (React, port 5190)
 The `IdeCard` component in the Launcher UI polls `GET /api/launcher/status/{tool}` every
 5 seconds. Clicking **Launch** calls `POST /api/launcher/start/{tool}`, polls until the
 container reports `running`, then opens the service URL in a new tab. A **Stop** button
-appears while the container is running.
+appears while the container is running. The Express server talks directly to the
+Docker socket; it does not proxy object-registry requests.
 
 ### OmniBioAI nginx routing
 
@@ -188,7 +200,9 @@ on port 3001 inside the container.
 | `GET` | `/api/dev/objects/` | Paginated object list (`search`, `type` filters) |
 | `GET` | `/api/dev/objects/{id}/` | Single object detail |
 | `GET` | `/api/dev/objects/?parent_id={id}` | Children / siblings for lineage view |
-| `POST` | `/api/dev/launch/rstudio/` | Signal backend to open RStudio after R script download |
+
+Object details can also generate and download an R starter script in the
+browser. The current frontend does not call a separate RStudio launch API.
 
 ### IDE services (new)
 
@@ -206,7 +220,8 @@ All requests carry `Authorization: Bearer <token>`.
 
 ## Docker Images
 
-Pre-built images are published to the GitHub Container Registry:
+The Studio deployment may use pre-built images published to the GitHub
+Container Registry:
 
 ```
 ghcr.io/omnibioai/omnibioai-jupyter:1.0
@@ -232,17 +247,23 @@ done
 
 ## Environment Variables
 
-### Launcher UI (baked in at build time, prefixed `REACT_APP_`)
+### Launcher UI (baked into the bundle at build time, prefixed `REACT_APP_`)
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `REACT_APP_OMNIBIOAI_BASE_URL` | `http://127.0.0.1:8000` | OmniBioAI backend API base URL |
-| `REACT_APP_OMNIBIOAI_TOKEN` | `dev` | Bearer token for all API requests |
-| `REACT_APP_JUPYTER_BASE` | `http://127.0.0.1:8890` | JupyterLab host for object-launch URL |
+| `REACT_APP_OMNIBIOAI_TOKEN` | `dev` | Bearer token compiled into API requests |
+| `REACT_APP_JUPYTER_BASE` | `http://127.0.0.1:8888` | JupyterLab host for object-launch URL |
 | `REACT_APP_JUPYTER_TOKEN` | `devtoken` | JupyterLab auth token (`?token=`) |
 | `REACT_APP_USE_MOCK` | `false` | Use hardcoded mock data without a backend |
 
-### docker-compose services (runtime)
+These values are embedded by Create React App during `npm run build`; setting
+them in a runtime container environment after the build does not change the
+already-generated JavaScript. In particular, any
+`REACT_APP_OMNIBIOAI_TOKEN` is recoverable by anyone who can download the
+bundle. Never compile a privileged or production secret into the frontend.
+
+### Studio Compose services (runtime)
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -261,13 +282,20 @@ done
 ## Development
 
 ```bash
-cp .env.example .env    # edit variables for your local setup
 npm install
 npm start               # dev server on http://localhost:3000
 ```
 
-The `proxy` field in `package.json` forwards `/api/*` calls to `http://127.0.0.1:8000`,
-so the OmniBioAI backend must be running locally during development.
+The `proxy` field in `package.json` forwards `/api/*` calls to
+`http://127.0.0.1:8000`, but the application normally uses the absolute
+`REACT_APP_OMNIBIOAI_BASE_URL` value. Configure that value for the API Gateway
+or backend you actually intend to use.
+
+Run the test command with:
+
+```bash
+npm test
+```
 
 **Production build:**
 
@@ -324,10 +352,7 @@ omnibioai-launcher/
 ├── public/
 │   └── index.html
 ├── server.js                    — Express backend (port 3001): /api/launcher/*
-│                                  (Docker socket container lifecycle) and
-│                                  /api/dev/* (object registry proxy)
-├── docker-compose.yml          — IDE services orchestration
-├── .env.example
+│                                  (Docker socket container lifecycle)
 ├── package.json
 ├── nginx.conf
 └── Dockerfile                  — Launcher UI (React → nginx)
