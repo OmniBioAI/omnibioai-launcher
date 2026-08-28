@@ -16,10 +16,17 @@ const TOOLS = {
   vscode:  { container: 'omnibioai-vscode',  port: 8083 },
 };
 
+// #54: talk to the docker-socket-proxy's exposed socket, not the raw
+// host one -- omnibioai-studio's docker-compose*.yml no longer mounts
+// /var/run/docker.sock into this container directly. Defaults to the
+// proxy's own path so this still works if DOCKER_SOCKET_PATH is unset
+// somewhere this service is run from outside that compose file.
+const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/proxy-socket/docker.sock';
+
 function dockerRequest(method, path) {
   return new Promise((resolve, reject) => {
     const opts = {
-      socketPath: '/var/run/docker.sock',
+      socketPath: DOCKER_SOCKET_PATH,
       path,
       method,
       headers: { 'Content-Type': 'application/json' },
