@@ -1,5 +1,7 @@
 # OmniBioAI Launcher
 
+![OmniBioAI Launcher](images/omnibioai-launcher.png)
+
 > README last reviewed: **2026-08-24**
 
 A browser-based gateway to interactive analysis environments for the OmniBioAI platform.
