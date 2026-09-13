@@ -2,7 +2,7 @@
 
 ![OmniBioAI Launcher](images/omnibioai-launcher.png)
 
-> README last reviewed: **2026-08-24**
+> README last reviewed against the repository: **2026-09-12**
 
 A browser-based gateway to interactive analysis environments for the OmniBioAI platform.
 The launcher operates in two independent modes: opening a specific registry object in your
@@ -23,7 +23,7 @@ and scripts.
 | **IDE Services** | Start / stop containerised JupyterLab, RStudio, and VS Code Server from the Launcher UI |
 
 The two modes are independent — IDE Services can be used without an object context, and
-Object Launch works with any running JupyterLab instance.
+Object Launch can target an already-running environment on the configured host.
 
 ---
 
@@ -33,7 +33,11 @@ Object Launch works with any running JupyterLab instance.
 |---|---|---|
 | **JupyterLab** | Full bioinformatics kernel (scanpy, DESeq2, scVelo, cellxgene …) | 8888 |
 | **RStudio** | R with Bioconductor — Seurat, DESeq2, scran, monocle3, tidyverse | 8787 |
-| **VS Code Server** | Python + R + Nextflow + WDL extensions, all packages from above | 8083 |
+| **VS Code Server** | Browser editor with Python and R extensions and the Python packages listed below | 8083 |
+
+> **Known port mismatch:** the object-launch path and lifecycle backend use port
+> `8083`, but `IdeCard` currently opens `http://localhost:8080` after starting VS
+> Code. Align the component or deployment before relying on that service tile.
 
 ---
 
@@ -50,32 +54,18 @@ docker compose up -d launcher
 Access at: `http://localhost/_svc/sdk` (via nginx, JWT required)
 Direct access (localhost only): `http://localhost:5190`
 
-The Launcher backend API runs on port 3001 internally.
-IDE container lifecycle (start/stop/status) is handled via
-the Docker socket — no additional configuration needed.
-
----
-
-## Studio-managed IDE services
-
-The supported full-stack deployment is managed by OmniBioAI Studio. Studio
-owns the IDE containers and supplies the Docker socket access required by the
-Launcher lifecycle API.
-
-```bash
-cd ~/Desktop/machine/omnibioai-studio
-docker compose up -d launcher
-```
+The Launcher container serves the UI through nginx on port `5190`; nginx proxies
+`/api/launcher/*` to the internal Express server on port `3001`. Studio owns the
+IDE containers and supplies a restricted Docker socket proxy at
+`/var/run/proxy-socket/docker.sock`. The Launcher starts and stops existing
+containers named `omnibioai-jupyter`, `omnibioai-rstudio`, and
+`omnibioai-vscode`; it does not create them.
 
 | Service | URL | Default credential |
 |---|---|---|
 | JupyterLab     | http://localhost:8888 | token: `$JUPYTER_TOKEN` (set in .env)    |
 | RStudio        | http://localhost:8787 | password: `$RSTUDIO_PASSWORD` (set in .env) |
 | VS Code Server | http://localhost:8083 | password: `$VSCODE_PASSWORD` (set in .env)  |
-
-The Launcher container exposes its browser UI on port `5190` and its internal
-Express lifecycle API on port `3001`. The API is reached through nginx at
-`/api/launcher/*`; port `3001` is not the public UI port.
 
 Change `JUPYTER_TOKEN`, `RSTUDIO_PASSWORD`, `VSCODE_PASSWORD`, and data/work
 directory variables in the Studio environment before deployment. Do not use
@@ -90,30 +80,31 @@ The Launcher UI is a React single-page app served on port 5190.
 **With a running backend:**
 
 ```bash
-npm install
-REACT_APP_OMNIBIOAI_BASE_URL=http://127.0.0.1:8000 \
-REACT_APP_OMNIBIOAI_TOKEN=dev \
+npm ci
+cp .env.example .env.local
 npm start               # dev server at http://localhost:3000
 ```
 
-Create a local `.env.local` instead if you do not want to put credentials in
-the shell command. This repository does not currently include a committed
-`.env.example` file.
+Edit `.env.local` for the backend and Jupyter endpoints you use. It is ignored
+by Git; `.env.example` contains the checked-in development template.
 
 **Via Docker:**
 
 ```bash
 docker build -t omnibioai-launcher .
 docker run \
-  -p 5190:5190 \
+  -p 127.0.0.1:5190:5190 \
+  -e DOCKER_SOCKET_PATH=/var/run/docker.sock \
   -v /var/run/docker.sock:/var/run/docker.sock \
   omnibioai-launcher
 ```
 
-The Docker socket mount is required only for IDE Services start/stop/status
-operations. It grants the container substantial control over the host Docker
-daemon; omit the lifecycle API or use the Studio-managed deployment when that
-trust boundary is not acceptable.
+This standalone example deliberately overrides the Studio proxy path and mounts
+the raw Docker socket. That mount is required only for IDE Services lifecycle
+operations and grants substantial control over the host Docker daemon. Keep the
+port bound to loopback, or use the Studio-managed socket proxy and authenticated
+gateway for shared deployments. The three named IDE containers must already
+exist on the same Docker daemon.
 
 **Direct link from any page:**
 
@@ -150,7 +141,7 @@ ComplexHeatmap, SingleCellExperiment, scran, scater, monocle3
 
 Base image: `codercom/code-server:latest`
 
-**Extensions** — ms-python.python, REditorSupport.r, nextflow-io.nf-lang, broadinstitute.wdl
+**Extensions** — ms-python.python, REditorSupport.r
 
 **Python packages** — scanpy, anndata, scVelo, pydeseq2, gseapy, biopython, pysam
 
@@ -177,8 +168,9 @@ Launcher UI  (React, port 5190)
 The `IdeCard` component in the Launcher UI polls `GET /api/launcher/status/{tool}` every
 5 seconds. Clicking **Launch** calls `POST /api/launcher/start/{tool}`, polls until the
 container reports `running`, then opens the service URL in a new tab. A **Stop** button
-appears while the container is running. The Express server talks directly to the
-Docker socket; it does not proxy object-registry requests.
+appears while the container is running. The Express server talks to the Docker
+API through `DOCKER_SOCKET_PATH` (the Studio socket proxy by default); it does
+not proxy object-registry requests.
 
 ### OmniBioAI nginx routing
 
@@ -214,13 +206,22 @@ browser. The current frontend does not call a separate RStudio launch API.
 | `POST` | `/api/launcher/start/{tool}` | Start the IDE container |
 | `POST` | `/api/launcher/stop/{tool}` | Stop the IDE container |
 
-`{tool}` is one of `jupyter`, `rstudio`, `vscode`.
-
-All requests carry `Authorization: Bearer <token>`.
+`{tool}` is one of `jupyter`, `rstudio`, `vscode`. The frontend sends
+`Authorization: Bearer <token>` to both API families, but `server.js` does not
+validate that token and currently allows CORS from any origin. Authentication
+and authorization must therefore be enforced by the Studio gateway. Do not
+expose port `5190` publicly without an equivalent protective proxy.
 
 ---
 
 ## Docker Images
+
+Pushes to `main` and version tags build the multi-platform Launcher image in
+GitHub Actions and publish it as:
+
+```
+ghcr.io/omnibioai/omnibioai-launcher:latest
+```
 
 The Studio deployment may use pre-built images published to the GitHub
 Container Registry:
@@ -255,7 +256,7 @@ done
 |---|---|---|
 | `REACT_APP_OMNIBIOAI_BASE_URL` | `http://127.0.0.1:8000` | OmniBioAI backend API base URL |
 | `REACT_APP_OMNIBIOAI_TOKEN` | `dev` | Bearer token compiled into API requests |
-| `REACT_APP_JUPYTER_BASE` | `http://127.0.0.1:8888` | JupyterLab host for object-launch URL |
+| `REACT_APP_JUPYTER_BASE` | `http://127.0.0.1:8890` | Hostname source for the Jupyter object-launch URL |
 | `REACT_APP_JUPYTER_TOKEN` | `devtoken` | JupyterLab auth token (`?token=`) |
 | `REACT_APP_USE_MOCK` | `false` | Use hardcoded mock data without a backend |
 
@@ -264,6 +265,16 @@ them in a runtime container environment after the build does not change the
 already-generated JavaScript. In particular, any
 `REACT_APP_OMNIBIOAI_TOKEN` is recoverable by anyone who can download the
 bundle. Never compile a privileged or production secret into the frontend.
+
+The current object-launch code takes only the hostname from
+`REACT_APP_JUPYTER_BASE` and always opens Jupyter on port `8888`; changing the
+port in that variable does not change the launched port.
+
+### Launcher lifecycle server (runtime)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DOCKER_SOCKET_PATH` | `/var/run/proxy-socket/docker.sock` | Unix socket used for Docker lifecycle requests |
 
 ### Studio Compose services (runtime)
 
@@ -283,8 +294,11 @@ bundle. Never compile a privileged or production secret into the frontend.
 
 ## Development
 
+Node.js 20 is used by the primary CI workflow and Docker build. Node.js 18 is
+also exercised by the legacy build-only workflow.
+
 ```bash
-npm install
+npm ci
 npm start               # dev server on http://localhost:3000
 ```
 
@@ -296,7 +310,8 @@ or backend you actually intend to use.
 Run the test command with:
 
 ```bash
-npm test
+CI=true npm test -- --watchAll=false
+npm run build
 ```
 
 **Production build:**
@@ -315,11 +330,14 @@ docker build -t omnibioai-launcher .
 # Override backend at build time
 docker build \
   --build-arg REACT_APP_OMNIBIOAI_BASE_URL=https://api.omnibioai.com \
-  --build-arg REACT_APP_OMNIBIOAI_TOKEN=mytoken \
+  --build-arg REACT_APP_OMNIBIOAI_TOKEN=development-token-only \
   -t omnibioai-launcher .
 
-docker run -p 5190:5190 omnibioai-launcher
+docker run -p 127.0.0.1:5190:5190 omnibioai-launcher
 ```
+
+The token build argument is shown only to explain the build interface. Because
+it is public in the JavaScript bundle, do not use a privileged token there.
 
 ---
 
@@ -340,7 +358,7 @@ omnibioai-launcher/
 │   ├── rstudio/
 │   │   └── Dockerfile          — RStudio + Bioconductor stack
 │   └── vscode/
-│       └── Dockerfile          — VS Code Server + Python/R/workflow extensions
+│       └── Dockerfile          — VS Code Server + Python/R extensions
 ├── src/
 │   ├── App.jsx                 — View logic: list, detail, launcher
 │   ├── App.css                 — Dark-theme styles
@@ -376,4 +394,7 @@ omnibioai-launcher/
 
 ## License
 
-Apache License 2.0
+No `LICENSE` file is currently tracked. This README previously identified the
+project as Apache-2.0, while the container publishing workflow labels the image
+as MIT. Reconcile those declarations and add the chosen license file before
+distribution.
