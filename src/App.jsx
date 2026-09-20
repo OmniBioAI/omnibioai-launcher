@@ -4,11 +4,10 @@ import ObjectCard from './components/ObjectCard';
 import EnvCard from './components/EnvCard';
 import Toast from './components/Toast';
 import InstallModal from './components/InstallModal';
+import { authHeaders } from './session';
 
 const BASE_URL = process.env.REACT_APP_OMNIBIOAI_BASE_URL || 'http://127.0.0.1:8000';
-const TOKEN = process.env.REACT_APP_OMNIBIOAI_TOKEN || 'dev';
 const JUPYTER_BASE = process.env.REACT_APP_JUPYTER_BASE || 'http://127.0.0.1:8890';
-const JUPYTER_TOKEN = process.env.REACT_APP_JUPYTER_TOKEN || 'devtoken';
 const USE_MOCK = process.env.REACT_APP_USE_MOCK === 'true';
 const HOST_IP = (() => {
   try { return new URL(process.env.REACT_APP_OMNIBIOAI_BASE_URL || '').hostname; }
@@ -329,7 +328,7 @@ function ObjectSelector({ onSelect }) {
     if (currentType && currentType !== 'all') params.set('type', currentType);
 
     fetch(`${BASE_URL}/api/dev/objects/?${params}`, {
-      headers: { Authorization: `Bearer ${TOKEN}` },
+      headers: authHeaders(),
     })
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then((data) => {
@@ -630,7 +629,7 @@ function ObjectDetail({ obj, objectId, onBack, onLaunch }) {
 
     fetches.push(
       fetch(`${BASE_URL}/api/dev/objects/?parent_id=${objectId}&page_size=50`, {
-        headers: { Authorization: `Bearer ${TOKEN}` },
+        headers: authHeaders(),
       })
         .then((r) => r.json())
         .then((d) => (Array.isArray(d.objects) ? d.objects : []))
@@ -640,7 +639,7 @@ function ObjectDetail({ obj, objectId, onBack, onLaunch }) {
     if (obj.parent_id) {
       fetches.push(
         fetch(`${BASE_URL}/api/dev/objects/?parent_id=${obj.parent_id}&page_size=50`, {
-          headers: { Authorization: `Bearer ${TOKEN}` },
+          headers: authHeaders(),
         })
           .then((r) => r.json())
           .then((d) => (Array.isArray(d.objects) ? d.objects : []))
@@ -649,7 +648,7 @@ function ObjectDetail({ obj, objectId, onBack, onLaunch }) {
 
       fetches.push(
         fetch(`${BASE_URL}/api/dev/objects/${obj.parent_id}/`, {
-          headers: { Authorization: `Bearer ${TOKEN}` },
+          headers: authHeaders(),
         })
           .then((r) => r.json())
           .catch(() => null)
@@ -854,7 +853,7 @@ function App() {
     setLoading(true);
     setFetchError(null);
     fetch(`${BASE_URL}/api/dev/objects/${objectId}/`, {
-      headers: { Authorization: `Bearer ${TOKEN}` },
+      headers: authHeaders(),
     })
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then((data) => {
@@ -868,7 +867,7 @@ function App() {
   const openObject = useCallback((id) => {
     setLoading(true);
     fetch(`${BASE_URL}/api/dev/objects/${id}/`, {
-      headers: { Authorization: `Bearer ${TOKEN}` },
+      headers: authHeaders(),
     })
       .then((r) => r.json())
       .then((data) => {
@@ -881,14 +880,16 @@ function App() {
   }, []);
 
   const jupyterHost = (() => { try { return new URL(JUPYTER_BASE).hostname || HOST_IP; } catch { return HOST_IP; } })();
-  const notebookUrl = `http://${jupyterHost}:8888?token=${JUPYTER_TOKEN}&omnibioai_object_id=${objectId}`;
+  // No token in the URL: Jupyter authenticates the user itself (its login page asks
+  // for the token, which is delivered out-of-band, never through this bundle).
+  const notebookUrl = `http://${jupyterHost}:8888/?omnibioai_object_id=${objectId}`;
 
   const buildRScript = () => {
     const name = obj?.name || obj?.object_type || 'Unknown';
     const objectType = obj?.object_type || 'Unknown';
     return (
       `# OmniBioAI — auto-generated starter script\n# Object: ${name}\n# Type:   ${objectType}\n# ID:     ${objectId}\n\n` +
-      `Sys.setenv(\n  OMNIBIOAI_OBJECT_ID = "${objectId}",\n  OMNIBIOAI_BASE_URL  = "${BASE_URL}",\n  OMNIBIOAI_TOKEN     = "${TOKEN}"\n)\n\n` +
+      `Sys.setenv(\n  OMNIBIOAI_OBJECT_ID = "${objectId}",\n  OMNIBIOAI_BASE_URL  = "${BASE_URL}",\n  OMNIBIOAI_TOKEN     = ""  # paste your own OmniBioAI access token\n)\n\n` +
       `library(httr2)\n\nobj <- request(Sys.getenv("OMNIBIOAI_BASE_URL")) |>\n` +
       `  req_url_path(paste0("/api/dev/objects/", Sys.getenv("OMNIBIOAI_OBJECT_ID"), "/")) |>\n` +
       `  req_headers(Authorization = paste("Bearer", Sys.getenv("OMNIBIOAI_TOKEN"))) |>\n` +

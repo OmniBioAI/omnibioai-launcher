@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { authHeaders } from '../session';
 
 const BASE_URL = process.env.REACT_APP_OMNIBIOAI_BASE_URL || 'http://127.0.0.1:8000';
-const TOKEN = process.env.REACT_APP_OMNIBIOAI_TOKEN || 'dev';
 
 const IDE_CONFIG = {
   jupyter: {
@@ -96,7 +96,7 @@ export function IdeCard({ tool }) {
   const fetchStatus = useCallback(async () => {
     try {
       const r = await fetch(`${BASE_URL}/api/launcher/status/${tool}`, {
-        headers: { Authorization: `Bearer ${TOKEN}` },
+        headers: authHeaders(),
       });
       if (r.ok) {
         const data = await r.json();
@@ -125,7 +125,7 @@ export function IdeCard({ tool }) {
     try {
       await fetch(`${BASE_URL}/api/launcher/start/${tool}`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
       });
     } catch {
       // best-effort — status polling will reconcile
@@ -139,7 +139,7 @@ export function IdeCard({ tool }) {
       // fetchStatus updates status state; check via local fetch
       try {
         const r = await fetch(`${BASE_URL}/api/launcher/status/${tool}`, {
-          headers: { Authorization: `Bearer ${TOKEN}` },
+          headers: authHeaders(),
         });
         if (r.ok) {
           const data = await r.json();
@@ -165,7 +165,7 @@ export function IdeCard({ tool }) {
     try {
       await fetch(`${BASE_URL}/api/launcher/stop/${tool}`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
       });
       setStatus('stopped');
     } catch {

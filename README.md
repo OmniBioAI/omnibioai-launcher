@@ -255,16 +255,19 @@ done
 | Variable | Default | Purpose |
 |---|---|---|
 | `REACT_APP_OMNIBIOAI_BASE_URL` | `http://127.0.0.1:8000` | OmniBioAI backend API base URL |
-| `REACT_APP_OMNIBIOAI_TOKEN` | `dev` | Bearer token compiled into API requests |
 | `REACT_APP_JUPYTER_BASE` | `http://127.0.0.1:8890` | Hostname source for the Jupyter object-launch URL |
-| `REACT_APP_JUPYTER_TOKEN` | `devtoken` | JupyterLab auth token (`?token=`) |
 | `REACT_APP_USE_MOCK` | `false` | Use hardcoded mock data without a backend |
 
-These values are embedded by Create React App during `npm run build`; setting
-them in a runtime container environment after the build does not change the
-already-generated JavaScript. In particular, any
-`REACT_APP_OMNIBIOAI_TOKEN` is recoverable by anyone who can download the
-bundle. Never compile a privileged or production secret into the frontend.
+These values are embedded by Create React App during `npm run build`;
+setting them in a runtime container environment after the build does not change
+the already-generated JavaScript. **Only non-secret configuration may be passed
+this way** -- everything compiled into the bundle is public. The UI holds no
+credential: it sends the signed-in user's own OmniBioAI access token
+(`omnibioai_access_token`, set by the host app) when one exists, and JupyterLab
+authenticates the user itself -- opening a notebook shows Jupyter's own login,
+which asks for the server's `JUPYTER_TOKEN` (delivered out-of-band, never through
+this UI). `tests/no-browser-secret.test.mjs` (`npm run test:security`) builds the
+UI with sentinel secrets and fails if any reaches the bundle.
 
 The current object-launch code takes only the hostname from
 `REACT_APP_JUPYTER_BASE` and always opens Jupyter on port `8888`; changing the
@@ -330,7 +333,6 @@ docker build -t omnibioai-launcher .
 # Override backend at build time
 docker build \
   --build-arg REACT_APP_OMNIBIOAI_BASE_URL=https://api.omnibioai.com \
-  --build-arg REACT_APP_OMNIBIOAI_TOKEN=development-token-only \
   -t omnibioai-launcher .
 
 docker run -p 127.0.0.1:5190:5190 omnibioai-launcher

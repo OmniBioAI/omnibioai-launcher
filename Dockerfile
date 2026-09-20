@@ -4,20 +4,19 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
-# CRA inlines REACT_APP_* vars at build time (`npm run build`), not at container
-# runtime -- setting them in docker-compose.yml's `environment:` only affects the
-# already-built static bundle's process, which never reads them. They have to
-# come in as build args here, or the src/*.jsx fallbacks (127.0.0.1:8000 etc.)
-# are silently the only value that's ever actually compiled in.
+# CRA inlines every REACT_APP_* variable into the PUBLIC JavaScript bundle at
+# build time (`npm run build`), not at container runtime. So only non-secret
+# configuration may be passed here (URLs, feature flags). NEVER pass a token,
+# password, API key or other reusable credential: it becomes readable by anyone
+# who can download the bundle -- this UI once published its Jupyter token that
+# way. The UI sends the signed-in user's own session token at runtime instead
+# (src/session.js), and Jupyter authenticates the user itself.
+# tests/no-browser-secret.test.mjs fails any change that reintroduces this.
 ARG REACT_APP_OMNIBIOAI_BASE_URL
-ARG REACT_APP_OMNIBIOAI_TOKEN
 ARG REACT_APP_JUPYTER_BASE
-ARG REACT_APP_JUPYTER_TOKEN
 ARG REACT_APP_USE_MOCK
 ENV REACT_APP_OMNIBIOAI_BASE_URL=$REACT_APP_OMNIBIOAI_BASE_URL \
-    REACT_APP_OMNIBIOAI_TOKEN=$REACT_APP_OMNIBIOAI_TOKEN \
     REACT_APP_JUPYTER_BASE=$REACT_APP_JUPYTER_BASE \
-    REACT_APP_JUPYTER_TOKEN=$REACT_APP_JUPYTER_TOKEN \
     REACT_APP_USE_MOCK=$REACT_APP_USE_MOCK
 RUN npm run build
 
