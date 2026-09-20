@@ -275,9 +275,15 @@ port in that variable does not change the launched port.
 
 ### Launcher lifecycle server (runtime)
 
+Every `/api/launcher/*` route requires a verified IAM bearer token (confirmed with
+omnibioai-auth's `/auth/validate`); starting or stopping a tool additionally needs
+`platform.manage_infra`. It fails closed: no token, an invalid token, or an
+unreachable auth service all deny. The UI sends the signed-in user's own token.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `DOCKER_SOCKET_PATH` | `/var/run/proxy-socket/docker.sock` | Unix socket used for Docker lifecycle requests |
+| `IAM_URL` | `http://auth-service:8001` | omnibioai-auth base URL used to verify bearer tokens |
 
 ### Studio Compose services (runtime)
 

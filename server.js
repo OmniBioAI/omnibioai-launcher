@@ -10,6 +10,49 @@ app.use((req, res, next) => {
   next();
 });
 
+// Authentication: every lifecycle route requires a verified IAM identity. The
+// bearer token is confirmed with omnibioai-auth's /auth/validate (signature,
+// expiry and revocation are decided there, not here), and this API fails CLOSED:
+// no token, an invalid token, or an unreachable auth service all deny. Starting or
+// stopping a tool is an infrastructure action on a shared container, so it also
+// needs platform.manage_infra; reading status needs only a valid identity. CORS
+// stays permissive because the credential is a bearer header, not an ambient
+// cookie, so a foreign page cannot borrow a visitor's authority.
+const IAM_URL = process.env.IAM_URL || 'http://auth-service:8001';
+const CONTROL_PERMISSION = 'platform.manage_infra';
+
+async function verifyIdentity(authorization) {
+  const match = /^Bearer\s+(\S+)$/i.exec(authorization || '');
+  if (!match) return { denied: 401, error: 'authentication required' };
+  let response;
+  try {
+    response = await fetch(`${IAM_URL}/auth/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: match[1] }),
+      signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined,
+    });
+  } catch {
+    return { denied: 503, error: 'authentication service unavailable' };
+  }
+  if (!response.ok) return { denied: 503, error: 'authentication service unavailable' };
+  const identity = await response.json().catch(() => null);
+  if (!identity || identity.valid !== true) return { denied: 401, error: 'invalid or expired token' };
+  return { identity };
+}
+
+function requireIdentity(permission) {
+  return async (req, res, next) => {
+    const result = await verifyIdentity(req.headers.authorization);
+    if (result.denied) return res.status(result.denied).json({ error: result.error });
+    if (permission && !(result.identity.permissions || []).includes(permission)) {
+      return res.status(403).json({ error: 'insufficient permissions' });
+    }
+    req.identity = result.identity;
+    next();
+  };
+}
+
 const TOOLS = {
   jupyter: { container: 'omnibioai-jupyter', port: 8888 },
   rstudio: { container: 'omnibioai-rstudio', port: 8787 },
@@ -44,7 +87,7 @@ function dockerRequest(method, path) {
   });
 }
 
-app.get('/api/launcher/status/:tool', async (req, res) => {
+app.get('/api/launcher/status/:tool', requireIdentity(), async (req, res) => {
   const tool = TOOLS[req.params.tool];
   if (!tool) return res.status(400).json({ error: 'unknown tool' });
   try {
@@ -57,7 +100,7 @@ app.get('/api/launcher/status/:tool', async (req, res) => {
   }
 });
 
-app.post('/api/launcher/start/:tool', async (req, res) => {
+app.post('/api/launcher/start/:tool', requireIdentity(CONTROL_PERMISSION), async (req, res) => {
   const tool = TOOLS[req.params.tool];
   if (!tool) return res.status(400).json({ error: 'unknown tool' });
   try {
@@ -68,7 +111,7 @@ app.post('/api/launcher/start/:tool', async (req, res) => {
   }
 });
 
-app.post('/api/launcher/stop/:tool', async (req, res) => {
+app.post('/api/launcher/stop/:tool', requireIdentity(CONTROL_PERMISSION), async (req, res) => {
   const tool = TOOLS[req.params.tool];
   if (!tool) return res.status(400).json({ error: 'unknown tool' });
   try {

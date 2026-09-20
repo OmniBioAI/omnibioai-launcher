@@ -23,10 +23,12 @@ jest.mock('http', () => {
 });
 require('../server');
 
-function requestApp(method, url) {
+function requestApp(method, url, headers = {}) {
   return new Promise((resolve) => {
     const req = new EventEmitter();
-    Object.assign(req, { method, url, originalUrl: url, headers: {}, connection: {} });
+    // Node lowercases incoming header names; mirror that so the fake request behaves like a real one.
+    const lowered = Object.fromEntries(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
+    Object.assign(req, { method, url, originalUrl: url, headers: lowered, connection: {} });
     const response = new EventEmitter();
     response.statusCode = 200;
     response.headers = {};
@@ -57,9 +59,21 @@ function dockerReply(statusCode, body, error) {
   });
 }
 
+
+const GOOD = { Authorization: 'Bearer valid-user-token' };
+
+// Stubs omnibioai-auth's POST /auth/validate.
+function iamReply(body, { ok = true, error } = {}) {
+  global.fetch = jest.fn(() => (error ? Promise.reject(error) : Promise.resolve({ ok, json: async () => body })));
+}
+const ADMIN = { valid: true, permissions: ['platform.manage_infra'] };
+const PLAIN_USER = { valid: true, permissions: ['dataset.read'] };
+
 describe('launcher Express API', () => {
+  beforeEach(() => { iamReply(ADMIN); });
+
   test('rejects unknown tools and handles CORS preflight', async () => {
-    expect(await requestApp('GET', '/api/launcher/status/nope')).toMatchObject({ status: 400, body: { error: 'unknown tool' } });
+    expect(await requestApp('GET', '/api/launcher/status/nope', GOOD)).toMatchObject({ status: 400, body: { error: 'unknown tool' } });
     const response = await requestApp('OPTIONS', '/api/launcher/status/jupyter');
     expect(response.status).toBe(204);
     expect(response.headers['access-control-allow-origin']).toBe('*');
@@ -68,32 +82,92 @@ describe('launcher Express API', () => {
 
   test('returns Docker status, defaults missing state to stopped, and parses text bodies', async () => {
     dockerReply(200, { State: { Status: 'running' } });
-    expect(await requestApp('GET', '/api/launcher/status/jupyter')).toMatchObject({ status: 200, body: { status: 'running' } });
+    expect(await requestApp('GET', '/api/launcher/status/jupyter', GOOD)).toMatchObject({ status: 200, body: { status: 'running' } });
     expect(mockDockerRequest).toHaveBeenCalledWith(expect.objectContaining({ path: '/containers/omnibioai-jupyter/json', method: 'GET' }), expect.any(Function));
 
     dockerReply(200, {});
-    expect(await requestApp('GET', '/api/launcher/status/vscode')).toMatchObject({ status: 200, body: { status: 'stopped' } });
+    expect(await requestApp('GET', '/api/launcher/status/vscode', GOOD)).toMatchObject({ status: 200, body: { status: 'stopped' } });
     dockerReply(200, 'not-json');
-    expect(await requestApp('GET', '/api/launcher/status/rstudio')).toMatchObject({ status: 200, body: { status: 'stopped' } });
+    expect(await requestApp('GET', '/api/launcher/status/rstudio', GOOD)).toMatchObject({ status: 200, body: { status: 'stopped' } });
     dockerReply(404, { message: 'missing' });
-    expect(await requestApp('GET', '/api/launcher/status/jupyter')).toMatchObject({ status: 200, body: { status: 'stopped' } });
+    expect(await requestApp('GET', '/api/launcher/status/jupyter', GOOD)).toMatchObject({ status: 200, body: { status: 'stopped' } });
   });
 
   test('returns success for start/stop and reports Docker failures', async () => {
     dockerReply(200, {});
-    expect(await requestApp('POST', '/api/launcher/start/jupyter')).toMatchObject({ status: 200, body: { ok: true } });
+    expect(await requestApp('POST', '/api/launcher/start/jupyter', GOOD)).toMatchObject({ status: 200, body: { ok: true } });
     expect(mockDockerRequest).toHaveBeenCalledWith(expect.objectContaining({ path: '/containers/omnibioai-jupyter/start', method: 'POST' }), expect.any(Function));
     dockerReply(200, {});
-    expect(await requestApp('POST', '/api/launcher/stop/rstudio')).toMatchObject({ status: 200, body: { ok: true } });
+    expect(await requestApp('POST', '/api/launcher/stop/rstudio', GOOD)).toMatchObject({ status: 200, body: { ok: true } });
     dockerReply(500, {}, new Error('socket unavailable'));
-    expect(await requestApp('POST', '/api/launcher/start/vscode')).toMatchObject({ status: 500, body: { error: 'socket unavailable' } });
+    expect(await requestApp('POST', '/api/launcher/start/vscode', GOOD)).toMatchObject({ status: 500, body: { error: 'socket unavailable' } });
     dockerReply(500, {}, new Error('socket unavailable'));
-    expect(await requestApp('POST', '/api/launcher/stop/vscode')).toMatchObject({ status: 500, body: { error: 'socket unavailable' } });
-    expect(await requestApp('POST', '/api/launcher/start/nope')).toMatchObject({ status: 400, body: { error: 'unknown tool' } });
+    expect(await requestApp('POST', '/api/launcher/stop/vscode', GOOD)).toMatchObject({ status: 500, body: { error: 'socket unavailable' } });
+    expect(await requestApp('POST', '/api/launcher/start/nope', GOOD)).toMatchObject({ status: 400, body: { error: 'unknown tool' } });
   });
 
   test('falls back to stopped when status Docker lookup fails', async () => {
     dockerReply(500, {}, new Error('daemon unavailable'));
-    expect(await requestApp('GET', '/api/launcher/status/jupyter')).toMatchObject({ status: 200, body: { status: 'stopped' } });
+    expect(await requestApp('GET', '/api/launcher/status/jupyter', GOOD)).toMatchObject({ status: 200, body: { status: 'stopped' } });
+  });
+
+  describe('authentication (fails closed)', () => {
+    const ROUTES = [['GET', '/api/launcher/status/jupyter'], ['POST', '/api/launcher/start/jupyter'], ['POST', '/api/launcher/stop/jupyter']];
+
+    test('the CORS preflight needs no credentials', async () => {
+      expect((await requestApp('OPTIONS', '/api/launcher/start/jupyter')).status).toBe(204);
+    });
+
+    test.each(ROUTES)('%s %s with no credentials is 401 and never reaches Docker', async (method, url) => {
+      dockerReply(200, {});
+      for (const headers of [{}, { Authorization: '' }, { Authorization: 'Bearer' }, { Authorization: 'Basic abc' }]) {
+        expect(await requestApp(method, url, headers)).toMatchObject({ status: 401, body: { error: 'authentication required' } });
+      }
+      expect(mockDockerRequest).not.toHaveBeenCalled();
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    test.each(ROUTES)('%s %s with an invalid or expired token is 401 and never reaches Docker', async (method, url) => {
+      dockerReply(200, {});
+      iamReply({ valid: false });
+      expect(await requestApp(method, url, GOOD)).toMatchObject({ status: 401 });
+      iamReply({});
+      expect(await requestApp(method, url, GOOD)).toMatchObject({ status: 401 });
+      iamReply(null);
+      expect(await requestApp(method, url, GOOD)).toMatchObject({ status: 401 });
+      expect(mockDockerRequest).not.toHaveBeenCalled();
+    });
+
+    test.each(ROUTES)('%s %s is 503, not open, when the auth service is unavailable', async (method, url) => {
+      dockerReply(200, {});
+      iamReply({ valid: true, permissions: ['platform.manage_infra'] }, { error: new Error('connect ECONNREFUSED') });
+      expect(await requestApp(method, url, GOOD)).toMatchObject({ status: 503 });
+      iamReply({ valid: true, permissions: ['platform.manage_infra'] }, { ok: false });
+      expect(await requestApp(method, url, GOOD)).toMatchObject({ status: 503 });
+      expect(mockDockerRequest).not.toHaveBeenCalled();
+    });
+
+    test('the token is confirmed with omnibioai-auth, not trusted locally', async () => {
+      dockerReply(200, { State: { Status: 'running' } });
+      await requestApp('GET', '/api/launcher/status/jupyter', GOOD);
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringMatching(/\/auth\/validate$/),
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ token: 'valid-user-token' }) })
+      );
+    });
+
+    test('a valid identity without platform.manage_infra may read status but not start or stop', async () => {
+      iamReply(PLAIN_USER);
+      dockerReply(200, { State: { Status: 'running' } });
+      expect(await requestApp('GET', '/api/launcher/status/jupyter', GOOD)).toMatchObject({ status: 200, body: { status: 'running' } });
+      dockerReply(200, {});
+      expect(await requestApp('POST', '/api/launcher/start/jupyter', GOOD)).toMatchObject({ status: 403, body: { error: 'insufficient permissions' } });
+      expect(await requestApp('POST', '/api/launcher/stop/jupyter', GOOD)).toMatchObject({ status: 403 });
+      expect(mockDockerRequest).not.toHaveBeenCalledWith(expect.objectContaining({ method: 'POST' }), expect.anything());
+    });
+
+    test('authentication is checked before the tool is validated', async () => {
+      expect(await requestApp('GET', '/api/launcher/status/nope')).toMatchObject({ status: 401 });
+    });
   });
 });
