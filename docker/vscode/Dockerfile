@@ -1,4 +1,6 @@
-FROM codercom/code-server:latest
+# Pin the upstream multi-platform index while retaining native amd64 and
+# arm64 child manifests.
+FROM codercom/code-server@sha256:0c067c3cf09ed1830ce282387826be8feefef8a5828f462791c2df3f1007ee17
 USER root
 RUN apt-get update && apt-get install -y \
     python3-pip r-base curl git && \
