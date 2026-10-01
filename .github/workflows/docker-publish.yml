@@ -2,14 +2,14 @@ name: Build & Publish Docker Image
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*.*.*"
 
 permissions:
   contents: read
   packages: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: docker-${{ github.ref }}
@@ -43,16 +43,24 @@ jobs:
         with:
           images: ghcr.io/omnibioai/omnibioai-launcher
           tags: |
-            # branch push → latest
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            # version tag v1.2.3 → 1.2.3 and latest
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest
+            type=raw,value=${{ github.sha }}
           labels: |
             org.opencontainers.image.title=OmniBioAI Launcher
             org.opencontainers.image.description=React-based launcher UI for the OmniBioAI platform
             org.opencontainers.image.source=https://github.com/OmniBioAI/omnibioai-launcher
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.licenses=MIT
+
+      - name: Assert full OCI revision
+        env:
+          FULL_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          test "${#FULL_SHA}" -eq 40
+          test "$FULL_SHA" = "$(git rev-parse HEAD)"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -63,27 +71,17 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          sbom: true
+          provenance: mode=max
           cache-from: type=registry,ref=ghcr.io/omnibioai/omnibioai-launcher:buildcache
           cache-to: type=registry,ref=ghcr.io/omnibioai/omnibioai-launcher:buildcache,mode=max
 
-      - name: Make package public
+      - name: Verify published manifest
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FULL_SHA: ${{ github.sha }}
         run: |
-          gh api \
-            --method PATCH \
-            -H "Accept: application/vnd.github+json" \
-            /user/packages/container/omnibioai-launcher/versions \
-            2>/dev/null || true
-          gh api \
-            --method PATCH \
-            -H "Accept: application/vnd.github+json" \
-            /orgs/OmniBioAI/packages/container/omnibioai-launcher \
-            -f visibility=public \
-            2>/dev/null || \
-          gh api \
-            --method PATCH \
-            -H "Accept: application/vnd.github+json" \
-            /user/packages/container/omnibioai-launcher \
-            -f visibility=public \
-            2>/dev/null || true
+          set -eu
+          manifest=$(docker buildx imagetools inspect "ghcr.io/omnibioai/omnibioai-launcher:$FULL_SHA")
+          echo "$manifest"
+          echo "$manifest" | grep -q 'Platform:    linux/amd64'
+          echo "$manifest" | grep -q 'Platform:    linux/arm64'
