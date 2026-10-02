@@ -21,7 +21,7 @@ jest.mock('http', () => {
   const actual = jest.requireActual('http');
   return { ...actual, request: (options, callback) => mockDockerRequest(options, callback) };
 });
-require('../server');
+const serverModule = require('../server');
 
 function requestApp(method, url, headers = {}) {
   return new Promise((resolve) => {
@@ -52,6 +52,24 @@ function dockerReply(statusCode, body, error) {
       process.nextTick(() => {
         callback(response);
         response.emit('data', typeof body === 'string' ? body : JSON.stringify(body));
+        response.emit('end');
+      });
+    };
+    return request;
+  });
+}
+
+function dockerReplySequence(replies) {
+  mockDockerRequest = jest.fn((options, callback) => {
+    const request = new EventEmitter();
+    request.end = () => {
+      const reply = replies.shift();
+      if (reply.error) return process.nextTick(() => request.emit('error', reply.error));
+      const response = new EventEmitter();
+      response.statusCode = reply.statusCode;
+      process.nextTick(() => {
+        callback(response);
+        response.emit('data', JSON.stringify(reply.body));
         response.emit('end');
       });
     };
@@ -111,8 +129,37 @@ describe('launcher Express API', () => {
     expect(await requestApp('GET', '/api/launcher/status/jupyter', GOOD)).toMatchObject({ status: 200, body: { status: 'stopped' } });
   });
 
+  test('inspects immutable image metadata and rejects architecture mismatch', async () => {
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const candidate = { container: 'omnibioai-jupyter', image_reference: 'registry.example.test/runtime:1' };
+    dockerReplySequence([
+      { statusCode: 200, body: { Image: digest, Config: { Image: candidate.image_reference }, State: { Running: false } } },
+      { statusCode: 200, body: { Architecture: 'amd64', RepoDigests: [`registry.example.test/runtime@${digest}`] } },
+    ]);
+    await expect(serverModule.inspectEnvironment(candidate, 'amd64')).resolves.toMatchObject({ image: { reference: candidate.image_reference, digest } });
+
+    dockerReplySequence([
+      { statusCode: 200, body: { Image: digest, Config: { Image: candidate.image_reference } } },
+      { statusCode: 200, body: { Architecture: 'arm64', RepoDigests: [] } },
+    ]);
+    await expect(serverModule.inspectEnvironment(candidate, 'amd64')).rejects.toMatchObject({ status: 422 });
+  });
+
+  test('GPU inspection accepts only explicitly pre-provisioned Docker GPU allocations', () => {
+    expect(serverModule.allocatedGpuCount({ HostConfig: {} })).toBe(0);
+    expect(serverModule.allocatedGpuCount({ HostConfig: { DeviceRequests: [
+      { Capabilities: [['gpu']], Count: 2 },
+      { Capabilities: [['gpu']], DeviceIDs: ['GPU-a'] },
+      { Capabilities: [['compute']], Count: 99 },
+    ] } })).toBe(3);
+  });
+
   describe('authentication (fails closed)', () => {
-    const ROUTES = [['GET', '/api/launcher/status/jupyter'], ['POST', '/api/launcher/start/jupyter'], ['POST', '/api/launcher/stop/jupyter']];
+    const ROUTES = [
+      ['GET', '/api/launcher/status/jupyter'], ['POST', '/api/launcher/start/jupyter'], ['POST', '/api/launcher/stop/jupyter'],
+      ['GET', '/api/launcher/v1/profiles'], ['GET', '/api/launcher/v1/workspaces/example/manifest'],
+      ['POST', '/api/launcher/v1/workspaces'], ['POST', '/api/launcher/v1/workspaces/from-run'],
+    ];
 
     test('the CORS preflight needs no credentials', async () => {
       expect((await requestApp('OPTIONS', '/api/launcher/start/jupyter')).status).toBe(204);
@@ -163,11 +210,32 @@ describe('launcher Express API', () => {
       dockerReply(200, {});
       expect(await requestApp('POST', '/api/launcher/start/jupyter', GOOD)).toMatchObject({ status: 403, body: { error: 'insufficient permissions' } });
       expect(await requestApp('POST', '/api/launcher/stop/jupyter', GOOD)).toMatchObject({ status: 403 });
+      expect(await requestApp('POST', '/api/launcher/v1/workspaces', GOOD)).toMatchObject({ status: 403 });
+      expect(await requestApp('POST', '/api/launcher/v1/workspaces/from-run', GOOD)).toMatchObject({ status: 403 });
       expect(mockDockerRequest).not.toHaveBeenCalledWith(expect.objectContaining({ method: 'POST' }), expect.anything());
     });
 
     test('authentication is checked before the tool is validated', async () => {
       expect(await requestApp('GET', '/api/launcher/status/nope')).toMatchObject({ status: 401 });
+    });
+
+    test('resource translation emits only bounded Docker CPU and memory controls', () => {
+      const update = serverModule.dockerResourceUpdate({ cpu: 1.5, memory_bytes: 536870912, privileged: true, mounts: ['/host'] });
+      expect(update).toEqual({ NanoCpus: 1500000000, Memory: 536870912 });
+      expect(Object.keys(update)).toEqual(['NanoCpus', 'Memory']);
+    });
+
+    test('workspace manifests are isolated by both user and organization', async () => {
+      const owner = { user_id: 'owner', organization_id: 'org-a' };
+      const key = serverModule.manifestKey(owner, 'private-workspace');
+      serverModule.manifests.set(key, { identity: owner });
+      iamReply({ valid: true, user_id: 'owner', organization_id: 'org-b', permissions: [] });
+      expect(await requestApp('GET', '/api/launcher/v1/workspaces/private-workspace/manifest', GOOD)).toMatchObject({ status: 404 });
+      iamReply({ valid: true, user_id: 'other', organization_id: 'org-a', permissions: [] });
+      expect(await requestApp('GET', '/api/launcher/v1/workspaces/private-workspace/manifest', GOOD)).toMatchObject({ status: 404 });
+      iamReply({ valid: true, user_id: 'owner', organization_id: 'org-a', permissions: [] });
+      expect(await requestApp('GET', '/api/launcher/v1/workspaces/private-workspace/manifest', GOOD)).toMatchObject({ status: 200 });
+      serverModule.manifests.delete(key);
     });
   });
 });

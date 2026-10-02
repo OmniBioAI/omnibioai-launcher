@@ -22,11 +22,24 @@ function installFetch() {
 
 describe('App', () => {
   beforeEach(() => {
-    window.history.replaceState({}, '', '/');
+    window.history.replaceState({}, '', '/?view=objects');
     installFetch();
     jest.spyOn(window.parent, 'postMessage').mockImplementation(() => {});
   });
   afterEach(() => jest.restoreAllMocks());
+
+  test('workspace APIs use the Launcher service mount, not the Workbench API origin', async () => {
+    window.history.replaceState({}, '', '/_svc/sdk');
+    const profile = { id: 'generic-python', name: 'Generic Python', preferred_ide: 'jupyterlab', resources: { cpu: 2, memory_bytes: 4 * 1024 ** 3, gpu: 0 } };
+    global.fetch = jest.fn((url) => {
+      if (url.endsWith('/api/launcher/v1/profiles')) return Promise.resolve({ ok: true, json: async () => ({ profiles: [profile], resource_limits: { cpu: 8, memory_bytes: 8 * 1024 ** 3, gpu: 0 } }) });
+      if (url.includes('/api/launcher/status/')) return Promise.resolve({ ok: true, json: async () => ({ status: 'stopped' }) });
+      return Promise.reject(new Error(`unexpected URL: ${url}`));
+    });
+    render(<App />);
+    expect(await screen.findByRole('button', { name: /Generic Python/i })).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledWith('/_svc/sdk/api/launcher/v1/profiles', expect.any(Object));
+  });
 
   test('loads the object list, filters/groups it, and opens details', async () => {
     render(<App />);
@@ -124,7 +137,7 @@ describe('App', () => {
 
   test('loads an object error and handles parent/sibling/child lineage and navigation', async () => {
     cleanup();
-    window.history.replaceState({}, '', '/');
+    window.history.replaceState({}, '', '/?view=objects');
     const parent = { object_id: 'parent-1', object_type: 'Study', name: 'Parent', metadata: {}, parent_id: null };
     const current = { ...child, parent_id: 'parent-1', inputs: ['input-1'], metadata: { progress: 42, log_tail: ['[ERROR] bad', '[WARN] caution', '[OK] fixed', '[DONE] done', 'plain'] } };
     const sibling = { object_id: 'sibling-1', object_type: 'Job', name: 'Sibling', metadata: {}, parent_id: 'parent-1' };

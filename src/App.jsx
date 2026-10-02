@@ -4,6 +4,7 @@ import ObjectCard from './components/ObjectCard';
 import EnvCard from './components/EnvCard';
 import Toast from './components/Toast';
 import InstallModal from './components/InstallModal';
+import WorkspaceBuilder from './components/WorkspaceBuilder';
 import { authHeaders } from './session';
 
 const BASE_URL = process.env.REACT_APP_OMNIBIOAI_BASE_URL || 'http://127.0.0.1:8000';
@@ -296,7 +297,7 @@ function GroupSection({ group, onSelect, groupMode, page, onLoadMore }) {
 }
 
 // ── ObjectSelector ────────────────────────────────────────────────────
-function ObjectSelector({ onSelect }) {
+function ObjectSelector({ onSelect, onBack }) {
   const [allObjects, setAllObjects]   = useState([]);
   const [loading, setLoading]         = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -377,11 +378,14 @@ function ObjectSelector({ onSelect }) {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '20px 0', borderBottom: '1px solid #2a2d3e', marginBottom: 20,
       }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 20, color: '#ffffff', letterSpacing: '-0.3px' }}>
-            OmniBioAI SDK
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {onBack && <button className="button button--ghost" onClick={onBack}>← Workspace</button>}
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 20, color: '#ffffff', letterSpacing: '-0.3px' }}>
+              OmniBioAI Objects
+            </div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>Registry browser</div>
           </div>
-          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>Analysis Launcher</div>
         </div>
         <div style={{ fontSize: 12, color: '#6b7280', textAlign: 'right' }}>
           {serverTotal !== null
@@ -817,8 +821,12 @@ function ObjectDetail({ obj, objectId, onBack, onLaunch }) {
 function App() {
   const params = new URLSearchParams(window.location.search);
   const urlObjectId = params.get('object_id');
+  const urlView = params.get('view');
+  // Launcher APIs are served by this service, not Studio's Workbench API
+  // origin. Studio mounts us at /_svc/sdk; direct port 5190 uses the origin root.
+  const launcherBaseUrl = window.location.pathname.startsWith('/_svc/sdk') ? '/_svc/sdk' : '';
 
-  const [view, setView]                     = useState(urlObjectId ? 'launcher' : 'list');
+  const [view, setView]                     = useState(urlObjectId ? 'launcher' : urlView === 'objects' ? 'list' : 'workspace');
   const [selectedObject, setSelectedObject] = useState(null);
   const [obj, setObj]                       = useState(null);
   const [loading, setLoading]               = useState(false);
@@ -917,13 +925,36 @@ function App() {
     }
   };
 
-  const handleCardClick = (type) => { setSelected(type); handleAction(type); };
+  const handleCardClick = (type) => {
+    setSelected(type);
+    handleAction(type);
+  };
+
+  const openWorkspaceIde = (ide) => {
+    if (ide === 'jupyterlab') openUrl(`http://${jupyterHost}:8888/`);
+    else if (ide === 'vscode') openUrl(`http://${HOST_IP}:8083`);
+    else if (ide === 'rstudio') openUrl(`http://${HOST_IP}:8787`);
+  };
+
+  // ── Workspace builder (default) ───────────────────────────────────
+  if (view === 'workspace') {
+    return (
+      <>
+        <a className="skip-link" href="#main-content">Skip to workspace configuration</a>
+        <WorkspaceBuilder
+          baseUrl={launcherBaseUrl}
+          onBrowseObjects={() => setView('list')}
+          onOpenIde={openWorkspaceIde}
+        />
+      </>
+    );
+  }
 
   // ── List view ──────────────────────────────────────────────────────
   if (view === 'list') {
     return (
       <div className="app">
-        <ObjectSelector onSelect={(o) => {
+        <ObjectSelector onBack={() => setView('workspace')} onSelect={(o) => {
           setSelectedObject(o);
           setObj(o);
           setView('detail');

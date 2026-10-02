@@ -5,6 +5,7 @@ import App from './App';
 import { IdeCard } from './components/IdeCard';
 
 describe('additional coverage for asynchronous and fallback paths', () => {
+  beforeEach(() => window.history.replaceState({}, '', '/?view=objects'));
   afterEach(() => {
     jest.useRealTimers();
     jest.restoreAllMocks();
