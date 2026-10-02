@@ -14,7 +14,7 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "prebuild": "node scripts/check-build-env.js",
-    "test:security": "node --test tests/"
+    "test:security": "node --test tests/*.test.mjs"
   },
   "proxy": "http://127.0.0.1:8000",
   "eslintConfig": {

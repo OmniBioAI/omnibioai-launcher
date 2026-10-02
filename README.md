@@ -1,408 +1,203 @@
 # OmniBioAI Launcher
 
-![OmniBioAI Launcher](images/omnibioai-launcher.png)
+OmniBioAI Launcher provisions and controls authorized interactive scientific workspaces. Its boundary is:
 
-> README last reviewed against the repository: **2026-09-12**
-
-A browser-based gateway to interactive analysis environments for the OmniBioAI platform.
-The launcher operates in two independent modes: opening a specific registry object in your
-preferred IDE, and starting/stopping long-running IDE services backed by Docker containers.
-
-This repository is intentionally separate from
-[omnibioai-sdk](https://github.com/OmniBioAI/omnibioai-sdk), the pure Python API client.
-The launcher is the browser entry point; the SDK is for programmatic use inside notebooks
-and scripts.
-
----
-
-## Overview
-
-| Mode | What it does |
-|---|---|
-| **Object Launch** | Browse the registry, select an object, open it in JupyterLab, VS Code, or RStudio with context pre-loaded |
-| **IDE Services** | Start / stop containerised JupyterLab, RStudio, and VS Code Server from the Launcher UI |
-
-The two modes are independent — IDE Services can be used without an object context, and
-Object Launch can target an already-running environment on the configured host.
-
----
-
-## Supported Environments
-
-| Environment | Description | Default port |
-|---|---|---|
-| **JupyterLab** | Full bioinformatics kernel (scanpy, DESeq2, scVelo, cellxgene …) | 8888 |
-| **RStudio** | R with Bioconductor — Seurat, DESeq2, scran, monocle3, tidyverse | 8787 |
-| **VS Code Server** | Browser editor with Python and R extensions and the Python packages listed below | 8083 |
-
-> **Known port mismatch:** the object-launch path and lifecycle backend use port
-> `8083`, but `IdeCard` currently opens `http://localhost:8080` after starting VS
-> Code. Align the component or deployment before relying on that service tile.
-
----
-
-## Running in OmniBioAI Stack (recommended)
-
-The Launcher is managed automatically by OmniBioAI Studio.
-No manual startup required — it starts with the full stack:
-
-```bash
-cd ~/Desktop/machine/omnibioai-studio
-docker compose up -d launcher
+```text
+OmniBioAI object or workspace request
+  -> validated workspace specification
+  -> compatible configured environment
+  -> authorized interactive workspace
 ```
 
-Access at: `http://localhost/_svc/sdk` (via nginx, JWT required)
-Direct access (localhost only): `http://localhost:5190`
+Launcher is not Studio, an IAM service, a workflow engine, a registry, TES, ToolServer, RAG, or a dependency solver. Those systems remain authoritative for their own data and authorization decisions.
 
-The Launcher container serves the UI through nginx on port `5190`; nginx proxies
-`/api/launcher/*` to the internal Express server on port `3001`. Studio owns the
-IDE containers and supplies a restricted Docker socket proxy at
-`/var/run/proxy-socket/docker.sock`. The Launcher starts and stops existing
-containers named `omnibioai-jupyter`, `omnibioai-rstudio`, and
-`omnibioai-vscode`; it does not create them.
+## Architecture inventory
 
-| Service | URL | Default credential |
+- **Frontend:** Create React App / React 18 single-page UI. It browses Studio-owned `/api/dev/objects/*` routes, displays object details and lineage, opens JupyterLab/RStudio/VS Code, and exposes progressive workspace profile/resource controls.
+- **Backend:** a small Express server on port `3001`, reverse-proxied by the image's nginx server on port `5190`.
+- **Container model:** three fixed, pre-created containers: `omnibioai-jupyter`, `omnibioai-rstudio`, and `omnibioai-vscode`. Launcher does not accept container names, Docker arguments, mounts, devices, or privileged flags from clients.
+- **Docker integration:** HTTP over `DOCKER_SOCKET_PATH`; Studio normally supplies a restricted socket proxy. Legacy lifecycle routes inspect/start/stop containers. The v1 workspace route also applies validated CPU and memory limits before start.
+- **Authentication:** every Launcher backend route validates the caller's bearer token with IAM's `/auth/validate`. Missing/invalid credentials and IAM outages deny access.
+- **Authorization:** status/profile/manifest reads require a valid identity. Lifecycle mutations require `platform.manage_infra`. Manifest reads additionally match both authoritative user and organization identifiers.
+- **Studio integration:** Studio owns routing, the fixed IDE containers, their credentials/mounts, and the socket proxy. Launcher does not duplicate those responsibilities.
+
+### UI visual source
+
+The Launcher UI follows the locally available OmniBioAI platform sources: `omnibioai-design-tokens/tokens.css` and Studio's shared `UI.jsx`, `OmniPage`, `Launch`, and `IdeServices` patterns. It uses the same near-black shell, elevated dark panels, translucent borders, compact mono labels, emerald primary actions, informational blue, status badges, 6–14px radii, and 767px responsive stacking convention. The relevant tokens are reproduced locally in `src/App.css`; the Launcher does not import sibling repositories at runtime.
+
+The default page is the workspace builder. The existing object registry remains available from **Browse object registry**, and direct `?object_id=...` links retain the legacy object-launch flow.
+
+### Existing compatibility routes
+
+| Method | Route | Behavior |
 |---|---|---|
-| JupyterLab     | http://localhost:8888 | token: `$JUPYTER_TOKEN` (set in .env)    |
-| RStudio        | http://localhost:8787 | password: `$RSTUDIO_PASSWORD` (set in .env) |
-| VS Code Server | http://localhost:8083 | password: `$VSCODE_PASSWORD` (set in .env)  |
+| `GET` | `/api/launcher/status/:tool` | Read fixed container status |
+| `POST` | `/api/launcher/start/:tool` | Start a fixed container |
+| `POST` | `/api/launcher/stop/:tool` | Stop a fixed container |
 
-Change `JUPYTER_TOKEN`, `RSTUDIO_PASSWORD`, `VSCODE_PASSWORD`, and data/work
-directory variables in the Studio environment before deployment. Do not use
-the development defaults in a shared or production environment.
+`tool` remains `jupyter`, `rstudio`, or `vscode`. These routes and their response shapes are unchanged.
 
----
+The frontend also consumes APIs owned by the configured OmniBioAI backend, not this Express server:
 
-## Quick Start — Object Launch
+- `GET /api/dev/objects/`
+- `GET /api/dev/objects/:id/`
+- `GET /api/dev/objects/?parent_id=:id`
 
-The Launcher UI is a React single-page app served on port 5190.
+The workspace builder routes `/api/launcher/*` through this Launcher service's same-origin mount (`/_svc/sdk` in Studio, or the origin root when opened directly on port `5190`). It does not send workspace lifecycle requests to the Workbench API base used by the legacy object registry.
 
-**With a running backend:**
+## Implemented workspace foundation
+
+### Canonical workspace specification
+
+`POST /api/launcher/v1/workspaces/validate` validates a request and resolves a compatible configured candidate without changing Docker state. `POST /api/launcher/v1/workspaces` validates, resolves, inspects the image architecture, applies bounded CPU/memory controls, starts the fixed container, and returns a manifest.
+
+The client may provide only workspace name/id/profile, IDE (`jupyterlab`, `rstudio`, or `vscode`), an optional exact image constraint, CPU, memory bytes, GPU count, architecture (`amd64` or `arm64`), and canonical object references.
+
+User and organization identity always come from verified IAM output. Unknown fields are rejected, including client-supplied identity, Docker arguments, mounts, devices, and privilege settings.
+
+### Workspace profiles
+
+`GET /api/launcher/v1/profiles` returns the declarative profiles and current resource ceilings:
+
+- Generic Python
+- Generic R
+- RNA-seq
+- Single-cell
+- Variant analysis
+- Proteomics
+- ML/AI development
+
+Profiles define preferred IDE, recommended resources, required capabilities, and nonsensitive environment metadata. They do not hard-code or guess container images. Specialized profiles fail closed unless configuration declares a candidate with every required capability.
+
+### Object references
+
+The strict canonical forms are:
+
+```text
+omnibioai://dataset/<id>
+omnibioai://workflow/<id>
+omnibioai://model/<id>
+omnibioai://run/<id>
+omnibioai://tool/<id>
+```
+
+Parsing an object reference never grants access. Object-aware provisioning currently returns `501` because this repository has no verified object-authorization service contract. Existing frontend object opening remains available and continues to rely on the authoritative backend and IDE authentication.
+
+### Environment resolution
+
+Resolution is deterministic and local/config-backed. With no configuration, candidates point only at the three existing fixed containers, advertise their basic language capability, and use the host architecture. For explicit deployment metadata, set `LAUNCHER_ENVIRONMENTS_JSON` to an array such as:
+
+```json
+[
+  {
+    "id": "local-python",
+    "ide": "jupyterlab",
+    "container": "omnibioai-jupyter",
+    "architectures": ["amd64"],
+    "capabilities": ["python"],
+    "gpu_available": 0,
+    "image_reference": "operator-verified/reference:tag",
+    "image_digest": "sha256:<64 lowercase hex characters>",
+    "environment": { "channel": "validated" }
+  }
+]
+```
+
+The example intentionally uses a placeholder rather than claiming an unverified published image. Candidate container names remain allowlisted. A client image constraint must exactly match a configured candidate. At launch, Docker image metadata must confirm the requested architecture; ambiguity or mismatch denies the launch.
+
+GPU requests never assume CUDA or inject a device request. They resolve only when an operator-configured candidate declares sufficient availability and Docker inspection confirms enough pre-provisioned `gpu` device requests; otherwise resolution fails closed.
+
+### Reproducible manifests
+
+Successful v1 launches return a schema `1.0` manifest containing workspace/profile/IDE, resolved image and digest when available, architecture/resources, canonical object references, authoritative user and organization, timestamp, launcher version, candidate provenance, and allowlisted scalar environment metadata.
+
+`GET /api/launcher/v1/workspaces/:workspaceId/manifest` returns an in-memory manifest only to the same user in the same organization. Serialization/deserialization is strict and rejects secret-like fields. Tokens, passwords, credentials, API keys, arbitrary headers, and private keys are never manifest fields.
+
+Current limitation: manifest storage is process-local and is lost on restart. Durable export/recreate/audit storage is planned behind a verified service contract.
+
+### Run to Debug Workspace
+
+`POST /api/launcher/v1/workspaces/from-run` defines the authenticated contract with a single `run_reference`. The implemented boundary strictly parses a `run` URI and requires an authorization callback before metadata resolution. No authoritative run authorization or metadata contract exists in this repository, so the HTTP route currently returns `501` and never fabricates run metadata.
+
+Planned flow:
+
+```text
+run reference -> service authorization -> run metadata resolver
+              -> workspace specification -> environment resolver -> launcher
+```
+
+## Security model
+
+- IAM validation and lifecycle permission checks fail closed.
+- Authoritative identity overrides are impossible because unknown request fields are rejected.
+- Both user and organization ownership are checked for manifests; cross-tenant misses return `404`.
+- Resource values have server-configured bounds and are converted only to fixed Docker `NanoCpus` and `Memory` fields.
+- Container names, mounts, paths, devices, privileged mode, and arbitrary Docker options are not client-controlled.
+- Object/run identifiers are context, not authorization.
+- Images use a strict reference grammar; client constraints cannot introduce a new candidate.
+- Browser build configuration is public-only. The security build test rejects secret-looking `REACT_APP_*` variables and scans emitted bundles/source maps.
+- CORS is permissive for bearer-header clients. Deployments must not expose IDE services without their own authentication and trusted routing.
+
+## Configuration
+
+### Browser build-time (public values only)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `REACT_APP_OMNIBIOAI_BASE_URL` | `http://127.0.0.1:8000` | Backend/API gateway base URL |
+| `REACT_APP_JUPYTER_BASE` | `http://127.0.0.1:8890` | Hostname source for object launch |
+| `REACT_APP_USE_MOCK` | `false` | Local mock object data |
+
+Create React App embeds these in public JavaScript. Never put credentials in a `REACT_APP_*` variable.
+
+### Backend runtime
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `IAM_URL` | `http://auth-service:8001` | IAM validation service |
+| `DOCKER_SOCKET_PATH` | `/var/run/proxy-socket/docker.sock` | Restricted Docker API socket |
+| `LAUNCHER_VERSION` | `0.1.0` | Manifest provenance version |
+| `LAUNCHER_ENVIRONMENTS_JSON` | fixed local candidates | Validated environment catalog |
+| `WORKSPACE_MAX_CPU` | `16` | Maximum requested CPU |
+| `WORKSPACE_MAX_MEMORY_BYTES` | `68719476736` | Maximum requested memory |
+| `WORKSPACE_MAX_GPU` | `8` | Maximum request; availability is separately candidate-bound |
+
+Studio owns IDE credentials, host directories, container creation, and mounts. They are not Launcher request fields and are never stored in manifests.
+
+## Development and tests
 
 ```bash
 npm ci
-cp .env.example .env.local
-npm start               # dev server at http://localhost:3000
-```
-
-Edit `.env.local` for the backend and Jupyter endpoints you use. It is ignored
-by Git; `.env.example` contains the checked-in development template.
-
-**Via Docker:**
-
-```bash
-docker build -t omnibioai-launcher .
-docker run \
-  -p 127.0.0.1:5190:5190 \
-  -e DOCKER_SOCKET_PATH=/var/run/docker.sock \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  omnibioai-launcher
-```
-
-This standalone example deliberately overrides the Studio proxy path and mounts
-the raw Docker socket. That mount is required only for IDE Services lifecycle
-operations and grants substantial control over the host Docker daemon. Keep the
-port bound to loopback, or use the Studio-managed socket proxy and authenticated
-gateway for shared deployments. The three named IDE containers must already
-exist on the same Docker daemon.
-
-**Direct link from any page:**
-
-```html
-<a href="http://127.0.0.1:5190/?object_id=56d3fc3a-709b-4ed0-bf17-8cb73c6746b0">Analyze</a>
-```
-
-If no `object_id` is given, the app opens a searchable registry list. Selecting an object
-shows a detail view (metadata, lineage, job log) and a button to open it in an environment.
-
----
-
-## Pre-installed Packages
-
-### JupyterLab (`docker/jupyter/Dockerfile`)
-
-Base image: `jupyter/datascience-notebook:latest`
-
-**Python** — scanpy, anndata, scVelo, squidpy, pyDEA, gseapy, biopython, pysam,
-cellxgene, leidenalg, harmonypy, decoupler, pydeseq2, omnipath
-
-**R / Bioconductor (via conda)** — DESeq2, edgeR, limma, Seurat
-
-### RStudio (`docker/rstudio/Dockerfile`)
-
-Base image: `rocker/rstudio:4.3.2`
-
-**Bioconductor** — DESeq2, edgeR, limma, Seurat, clusterProfiler, EnhancedVolcano,
-ComplexHeatmap, SingleCellExperiment, scran, scater, monocle3
-
-**CRAN** — tidyverse, ggplot2, pheatmap, RColorBrewer, patchwork, cowplot
-
-### VS Code Server (`docker/vscode/Dockerfile`)
-
-Base image: `codercom/code-server:latest`
-
-**Extensions** — ms-python.python, REditorSupport.r
-
-**Python packages** — scanpy, anndata, scVelo, pydeseq2, gseapy, biopython, pysam
-
----
-
-## Architecture
-
-```
-OmniBioAI Studio
-      |
-Launcher UI  (React, port 5190)
-      |
-  ┌───┴──────────────────────────┐
-  │  Object Launch               │  IDE Services
-  │  (registry object context)   │  (container lifecycle)
-  └───┬──────────────────────────┘
-      |                                  |
-  Open object in:               browser / desktop host
-  - JupyterLab  (URL + token)   GET  /api/launcher/status/{tool}
-  - VS Code     (env var copy)  POST /api/launcher/start/{tool}
-  - RStudio     (.R download)   POST /api/launcher/stop/{tool}
-```
-
-The `IdeCard` component in the Launcher UI polls `GET /api/launcher/status/{tool}` every
-5 seconds. Clicking **Launch** calls `POST /api/launcher/start/{tool}`, polls until the
-container reports `running`, then opens the service URL in a new tab. A **Stop** button
-appears while the container is running. The Express server talks to the Docker
-API through `DOCKER_SOCKET_PATH` (the Studio socket proxy by default); it does
-not proxy object-registry requests.
-
-### OmniBioAI nginx routing
-
-In production the Launcher is accessed via nginx:
-
-```
-http://localhost/_svc/sdk  →  launcher:5190  (JWT required)
-```
-
-The `/api/launcher/*` endpoints are proxied to the Express backend
-on port 3001 inside the container.
-
----
-
-## API Endpoints
-
-### Object registry (existing)
-
-| Method | Endpoint | Purpose |
-|---|---|---|
-| `GET` | `/api/dev/objects/` | Paginated object list (`search`, `type` filters) |
-| `GET` | `/api/dev/objects/{id}/` | Single object detail |
-| `GET` | `/api/dev/objects/?parent_id={id}` | Children / siblings for lineage view |
-
-Object details can also generate and download an R starter script in the
-browser. The current frontend does not call a separate RStudio launch API.
-
-### IDE services (new)
-
-| Method | Endpoint | Purpose |
-|---|---|---|
-| `GET` | `/api/launcher/status/{tool}` | Container status (`running` / `starting` / `stopped`) |
-| `POST` | `/api/launcher/start/{tool}` | Start the IDE container |
-| `POST` | `/api/launcher/stop/{tool}` | Stop the IDE container |
-
-`{tool}` is one of `jupyter`, `rstudio`, `vscode`. The frontend sends
-`Authorization: Bearer <token>` to both API families, but `server.js` does not
-validate that token and currently allows CORS from any origin. Authentication
-and authorization must therefore be enforced by the Studio gateway. Do not
-expose port `5190` publicly without an equivalent protective proxy.
-
----
-
-## Docker Images
-
-Pushes to `main` and version tags build the multi-platform Launcher image in
-GitHub Actions and publish it as:
-
-```
-ghcr.io/omnibioai/omnibioai-launcher:latest
-```
-
-The Studio deployment may use pre-built images published to the GitHub
-Container Registry:
-
-```
-ghcr.io/omnibioai/omnibioai-jupyter:1.0
-ghcr.io/omnibioai/omnibioai-rstudio:1.0
-ghcr.io/omnibioai/omnibioai-vscode:1.0
-```
-
-To rebuild and push:
-
-```bash
-export CR_PAT=$(gh auth token)
-echo $CR_PAT | docker login ghcr.io -u man4ish --password-stdin
-
-for tool in jupyter rstudio vscode; do
-  docker build \
-    -t ghcr.io/omnibioai/omnibioai-${tool}:1.0 \
-    -f docker/${tool}/Dockerfile docker/${tool}/
-  docker push ghcr.io/omnibioai/omnibioai-${tool}:1.0
-done
-```
-
----
-
-## Environment Variables
-
-### Launcher UI (baked into the bundle at build time, prefixed `REACT_APP_`)
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `REACT_APP_OMNIBIOAI_BASE_URL` | `http://127.0.0.1:8000` | OmniBioAI backend API base URL |
-| `REACT_APP_JUPYTER_BASE` | `http://127.0.0.1:8890` | Hostname source for the Jupyter object-launch URL |
-| `REACT_APP_USE_MOCK` | `false` | Use hardcoded mock data without a backend |
-
-These values are embedded by Create React App during `npm run build`;
-setting them in a runtime container environment after the build does not change
-the already-generated JavaScript. **Only non-secret configuration may be passed
-this way** -- everything compiled into the bundle is public. The UI holds no
-credential: it sends the signed-in user's own OmniBioAI access token
-(`omnibioai_access_token`, set by the host app) when one exists, and JupyterLab
-authenticates the user itself -- opening a notebook shows Jupyter's own login,
-which asks for the server's `JUPYTER_TOKEN` (delivered out-of-band, never through
-this UI). `tests/no-browser-secret.test.mjs` (`npm run test:security`) builds the
-UI with sentinel secrets and fails if any reaches the bundle.
-
-The current object-launch code takes only the hostname from
-`REACT_APP_JUPYTER_BASE` and always opens Jupyter on port `8888`; changing the
-port in that variable does not change the launched port.
-
-### Launcher lifecycle server (runtime)
-
-Every `/api/launcher/*` route requires a verified IAM bearer token (confirmed with
-omnibioai-auth's `/auth/validate`); starting or stopping a tool additionally needs
-`platform.manage_infra`. It fails closed: no token, an invalid token, or an
-unreachable auth service all deny. The UI sends the signed-in user's own token.
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `DOCKER_SOCKET_PATH` | `/var/run/proxy-socket/docker.sock` | Unix socket used for Docker lifecycle requests |
-| `IAM_URL` | `http://auth-service:8001` | omnibioai-auth base URL used to verify bearer tokens |
-
-### Studio Compose services (runtime)
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `JUPYTER_TOKEN` | `omnibioai` | JupyterLab authentication token |
-| `RSTUDIO_PASSWORD` | `omnibioai` | RStudio login password |
-| `VSCODE_PASSWORD` | `omnibioai` | VS Code Server login password |
-| `OMNIBIOAI_DATA_DIR` | `./data` | Host path mounted as `/data` in all containers |
-| `OMNIBIOAI_WORK_DIR` | `./work` | Host path mounted as `/work` in all containers |
-
-> **Security note:** `JUPYTER_TOKEN`, `RSTUDIO_PASSWORD`, and
-> `VSCODE_PASSWORD` default to `omnibioai`. Change these in
-> `omnibioai-studio/.env` before production use.
-
----
-
-## Development
-
-Node.js 20 is used by the primary CI workflow and Docker build. Node.js 18 is
-also exercised by the legacy build-only workflow.
-
-```bash
-npm ci
-npm start               # dev server on http://localhost:3000
-```
-
-The `proxy` field in `package.json` forwards `/api/*` calls to
-`http://127.0.0.1:8000`, but the application normally uses the absolute
-`REACT_APP_OMNIBIOAI_BASE_URL` value. Configure that value for the API Gateway
-or backend you actually intend to use.
-
-Run the test command with:
-
-```bash
-CI=true npm test -- --watchAll=false
+CI=true npm test -- --runInBand
+npm run test:security
 npm run build
 ```
 
-**Production build:**
+`npm run test:security` performs production builds with synthetic sentinels. It never uses real secrets.
 
-```bash
-npm run build
-# serve the build/ output with any static file server
-npx serve -s build -l 5190
-```
+The main image is built by the repository workflow as `ghcr.io/omnibioai/omnibioai-launcher`. The repository also contains an explicit workflow for the VS Code runtime. This README does not claim JupyterLab or RStudio GHCR artifacts are published because no authoritative publishing workflow for those images is currently present.
 
-**Launcher Docker image** (nginx, port 5190):
+## Current limitations and deferred work
 
-```bash
-docker build -t omnibioai-launcher .
+Implemented today: validation/domain models, profiles, manifests, object URI parsing, local/config resolution, CPU/memory enforcement for stopped fixed containers, architecture verification, pre-provisioned GPU validation, IAM-derived identity, tenant-scoped reads, the Run-to-Debug interface boundary, and progressive UI controls.
 
-# Override backend at build time
-docker build \
-  --build-arg REACT_APP_OMNIBIOAI_BASE_URL=https://api.omnibioai.com \
-  -t omnibioai-launcher .
+Deferred until authoritative contracts and provisioning backends exist:
 
-docker run -p 127.0.0.1:5190:5190 omnibioai-launcher
-```
+- object-service and run-service authorization/metadata integration;
+- durable manifest storage and export/recreate/audit workflows;
+- per-user container creation and true concurrent workspace isolation;
+- Kubernetes, Slurm, AWS, and Azure provisioning;
+- arbitrary package installation or dependency solving;
+- AI-generated shell execution or workspace construction;
+- workflow, registry, IAM, Studio, RAG, TES, or ToolServer functionality.
 
-The token build argument is shown only to explain the build interface. Because
-it is public in the JavaScript bundle, do not use a privileged token there.
+The fixed-container model is inherently shared infrastructure. `platform.manage_infra` remains required for mutation, and v1 refuses to alter resource limits while a shared container is running.
 
----
+## Known technical debt
 
-## Mock Mode
-
-Set `REACT_APP_USE_MOCK=true` (or pass `?object_id=test` in the URL) to run entirely on
-hardcoded data without a backend. Useful for UI development and screenshots.
-
----
-
-## Project Structure
-
-```
-omnibioai-launcher/
-├── docker/
-│   ├── jupyter/
-│   │   └── Dockerfile          — JupyterLab + bioinformatics packages
-│   ├── rstudio/
-│   │   └── Dockerfile          — RStudio + Bioconductor stack
-│   └── vscode/
-│       └── Dockerfile          — VS Code Server + Python/R extensions
-├── src/
-│   ├── App.jsx                 — View logic: list, detail, launcher
-│   ├── App.css                 — Dark-theme styles
-│   ├── index.js                — React root mount
-│   └── components/
-│       ├── EnvCard.jsx         — Clickable environment tile (object launch)
-│       ├── IdeCard.jsx         — IDE service card with status polling
-│       ├── ObjectCard.jsx      — Object metadata display
-│       ├── InstallModal.jsx    — Fallback modal when desktop app not found
-│       └── Toast.jsx           — Ephemeral status notification
-├── public/
-│   └── index.html
-├── server.js                    — Express backend (port 3001): /api/launcher/*
-│                                  (Docker socket container lifecycle)
-├── package.json
-├── nginx.conf
-└── Dockerfile                  — Launcher UI (React → nginx)
-```
-
----
-
-## Related Services
-
-| Service | Role |
-|---------|------|
-| `omnibioai-studio` | Manages Launcher container lifecycle |
-| `omnibioai` | Workbench backend — object registry API |
-| `omnibioai-api-gateway` | JWT enforcement on `/_svc/sdk` |
-| `omnibioai-control-center` | Health monitoring (launcher:5190) |
-| `omnibioai-sdk` | Python SDK client — programmatic alternative to Launcher UI |
-
----
-
-## License
-
-No `LICENSE` file is currently tracked. This README previously identified the
-project as Apache-2.0, while the container publishing workflow labels the image
-as MIT. Reconcile those declarations and add the chosen license file before
-distribution.
+- The object-launch URL derives only the hostname from `REACT_APP_JUPYTER_BASE` and uses port `8888`.
+- The IDE service component's VS Code URL uses port `8080`, while the backend/container convention is `8083`.
+- Some legacy React async tests emit `act(...)` warnings despite passing.
+- Create React App and its dependency tree report upstream audit findings; upgrading the frontend toolchain is separate from this bounded enhancement.
+- Manifest persistence and per-user runtime isolation require a verified owning service/deployment contract.
+- License metadata is inconsistent: no `LICENSE` file is tracked while workflow metadata says MIT.
