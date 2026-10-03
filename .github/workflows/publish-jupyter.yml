@@ -1,0 +1,454 @@
+name: Publish Jupyter Runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character source commit to publish
+        required: true
+        type: string
+      version:
+        description: New immutable release version, matching the existing bare N.N convention already referenced in production compose (for example 1.1)
+        required: true
+        type: string
+      publish_latest:
+        description: Also promote latest after every validation gate passes (normally false)
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/omnibioai/omnibioai-jupyter
+  SOURCE_REPOSITORY: https://github.com/OmniBioAI/omnibioai-launcher
+  DOCKERFILE: docker/jupyter/Dockerfile
+
+concurrency:
+  group: publish-jupyter-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build_amd64:
+    name: Native linux/amd64 image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      - name: Assert native AMD64 runner and exact source revision
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -eu
+          test "$(uname -m)" = x86_64
+          test "${#SOURCE_SHA}" -eq 40
+          test "$SOURCE_SHA" = "$(git rev-parse HEAD)"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push immutable AMD64 artifact
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ inputs.version }}-amd64-${{ inputs.source_sha }}
+          labels: |
+            org.opencontainers.image.source=${{ env.SOURCE_REPOSITORY }}
+            org.opencontainers.image.revision=${{ inputs.source_sha }}
+            org.opencontainers.image.version=${{ inputs.version }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=jupyter-amd64
+          cache-to: type=gha,mode=max,scope=jupyter-amd64
+
+  build_arm64:
+    name: Native linux/arm64 image
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      - name: Assert native ARM64 runner and exact source revision
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -eu
+          test "$(uname -m)" = aarch64
+          test "${#SOURCE_SHA}" -eq 40
+          test "$SOURCE_SHA" = "$(git rev-parse HEAD)"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push immutable ARM64 artifact
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE }}
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ inputs.version }}-arm64-${{ inputs.source_sha }}
+          labels: |
+            org.opencontainers.image.source=${{ env.SOURCE_REPOSITORY }}
+            org.opencontainers.image.revision=${{ inputs.source_sha }}
+            org.opencontainers.image.version=${{ inputs.version }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=jupyter-arm64
+          cache-to: type=gha,mode=max,scope=jupyter-arm64
+
+  assemble_and_verify:
+    name: Assemble candidate index and independently verify
+    needs: [build_amd64, build_arm64]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      amd64_digest: ${{ needs.build_amd64.outputs.digest }}
+      arm64_digest: ${{ needs.build_arm64.outputs.digest }}
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate inputs and assemble candidate OCI index (NOT latest)
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          AMD64_DIGEST: ${{ needs.build_amd64.outputs.digest }}
+          ARM64_DIGEST: ${{ needs.build_arm64.outputs.digest }}
+        run: |
+          set -eu
+          test "${#SOURCE_SHA}" -eq 40
+          printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+$'
+          test -n "$AMD64_DIGEST"
+          test -n "$ARM64_DIGEST"
+          # Only the immutable version tag and the source-sha tag are created
+          # here. `latest` is deliberately NOT touched by this job -- it is
+          # promoted (if at all) by the separate promote_latest job, gated on
+          # this verification AND both runtime smoke jobs succeeding. An
+          # earlier reference workflow in this ecosystem (publish-model-
+          # registry.yml) created `latest` inside this same assembly step,
+          # before any verification or smoke test ran -- that ordering is
+          # exactly the non-fail-closed defect this job must not repeat.
+          docker buildx imagetools create \
+            --tag "$IMAGE:$VERSION" \
+            --tag "$IMAGE:$SOURCE_SHA" \
+            "$IMAGE@$AMD64_DIGEST" \
+            "$IMAGE@$ARM64_DIGEST"
+
+      - name: Verify remote index platform count and digest consistency
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -eu
+          RAW_INDEX="$(docker buildx imagetools inspect "$IMAGE:$VERSION" --raw)"
+          MEDIA_TYPE="$(jq -r '.mediaType // empty' <<<"$RAW_INDEX")"
+          case "$MEDIA_TYPE" in
+            application/vnd.oci.image.index.v1+json|application/vnd.docker.distribution.manifest.list.v2+json) ;;
+            *) echo "FAIL: $IMAGE:$VERSION is not a multi-arch index (mediaType=$MEDIA_TYPE)" >&2; exit 1 ;;
+          esac
+
+          runtime_count() {
+            jq -r --arg arch "$1" '
+              [.manifests[]
+               | select(.platform.architecture == $arch and .platform.os == "linux")
+               | select((.annotations["vnd.docker.reference.type"] // "") != "attestation-manifest")
+              ] | length
+            ' <<<"$RAW_INDEX"
+          }
+          AMD64_COUNT="$(runtime_count amd64)"
+          ARM64_COUNT="$(runtime_count arm64)"
+          test "$AMD64_COUNT" -eq 1
+          test "$ARM64_COUNT" -eq 1
+          echo "INDEX_PLATFORM_COUNT=2 (amd64=1, arm64=1): PASS"
+
+          VERSION_DIGEST="$(docker buildx imagetools inspect "$IMAGE:$VERSION" | awk '/^Digest:/ {print $2; exit}')"
+          SOURCE_DIGEST="$(docker buildx imagetools inspect "$IMAGE:$SOURCE_SHA" | awk '/^Digest:/ {print $2; exit}')"
+          test -n "$VERSION_DIGEST"
+          test "$VERSION_DIGEST" = "$SOURCE_DIGEST"
+          echo "TAG_DIGESTS_MATCH=PASS"
+
+      - name: Verify per-architecture OCI metadata and SBOM/provenance subject-binding
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_REPOSITORY: ${{ env.SOURCE_REPOSITORY }}
+        run: |
+          set -eu
+          test "${#SOURCE_SHA}" -eq 40
+          for arch in amd64 arm64; do
+            ref="$IMAGE:$VERSION-$arch-$SOURCE_SHA"
+            index_json="$(docker buildx imagetools inspect "$ref" --raw)"
+
+            runtime_digest="$(jq -r --arg arch "$arch" \
+              '[.manifests[] | select(.platform.os=="linux" and .platform.architecture==$arch)] | if length==1 then .[0].digest else empty end' \
+              <<<"$index_json")"
+            attest_digest="$(jq -r \
+              '[.manifests[] | select(.annotations["vnd.docker.reference.type"]=="attestation-manifest")] | if length==1 then .[0].digest else empty end' \
+              <<<"$index_json")"
+            test -n "$runtime_digest"
+            test -n "$attest_digest"
+
+            # Resolve the real image config by digest and compare with exact
+            # equality -- NOT `.Image.config.Labels` (wrong case; silently
+            # resolves to null and would make every assertion vacuously
+            # pass) and NOT a grep over the human-readable `imagetools
+            # inspect` summary (that summary never surfaces Config.Labels at
+            # all, and a raw grep can accidentally match unrelated substrings
+            # elsewhere in the index/attestation text).
+            labels="$(docker buildx imagetools inspect "$IMAGE@$runtime_digest" --format '{{json .Image.Config.Labels}}')"
+            actual_source="$(jq -r '."org.opencontainers.image.source" // empty' <<<"$labels")"
+            actual_revision="$(jq -r '."org.opencontainers.image.revision" // empty' <<<"$labels")"
+            actual_version="$(jq -r '."org.opencontainers.image.version" // empty' <<<"$labels")"
+            test "$actual_source" = "$SOURCE_REPOSITORY"
+            [[ "$actual_revision" =~ ^[0-9a-f]{40}$ ]]
+            test "$actual_revision" = "$SOURCE_SHA"
+            test "$actual_version" = "$VERSION"
+            echo "${arch^^}_OCI_METADATA=PASS"
+
+            # Subject-bind SBOM/provenance to THIS runtime digest specifically
+            # -- not merely present somewhere in the index. subject.digest is
+            # read as the full "sha256:<hex>" string throughout; it is never
+            # stripped of its "sha256:" prefix before comparison.
+            attest_json="$(docker buildx imagetools inspect "$IMAGE@$attest_digest" --raw)"
+            subject_digest="$(jq -r '.subject.digest // empty' <<<"$attest_json")"
+            test "$subject_digest" = "$runtime_digest"
+            predicate_types="$(jq -r '[.layers[]? | select(.mediaType=="application/vnd.in-toto+json") | .annotations["in-toto.io/predicate-type"]] | sort | join(",")' <<<"$attest_json")"
+            grep -q 'https://spdx.dev/Document' <<<"$predicate_types"
+            grep -q 'https://slsa.dev/provenance/v1' <<<"$predicate_types"
+            echo "${arch^^}_SBOM_SUBJECT_BINDING=PASS (subject=$subject_digest)"
+            echo "${arch^^}_PROVENANCE_SUBJECT_BINDING=PASS (subject=$subject_digest)"
+          done
+
+  smoke_amd64:
+    name: Runtime smoke (native linux/amd64)
+    needs: [build_amd64, build_arm64, assemble_and_verify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DIGEST: ${{ needs.build_amd64.outputs.digest }}
+      JUPYTER_SMOKE_TOKEN: ci-smoke-${{ github.run_id }}
+    steps:
+      - name: Assert native AMD64 runner
+        run: test "$(uname -m)" = x86_64
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull immutable AMD64 artifact by digest
+        run: |
+          set -eu
+          test -n "$DIGEST"
+          docker pull --platform linux/amd64 "$IMAGE@$DIGEST"
+
+      - name: Start container and assert reported architecture
+        run: |
+          set -eu
+          cid=$(docker run -d --platform linux/amd64 -p 18901:8888 \
+            -e JUPYTER_TOKEN="$JUPYTER_SMOKE_TOKEN" \
+            "$IMAGE@$DIGEST")
+          echo "CID=$cid" >> "$GITHUB_ENV"
+          reported_arch=$(docker exec "$cid" uname -m)
+          test "$reported_arch" = x86_64
+
+      - name: Wait for health, then probe token-gated API and /lab
+        run: |
+          set -eu
+          for _ in $(seq 1 30); do
+            if curl -sf --max-time 3 "http://127.0.0.1:18901/api?token=$JUPYTER_SMOKE_TOKEN" >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -sf --max-time 5 "http://127.0.0.1:18901/api?token=$JUPYTER_SMOKE_TOKEN" >/dev/null
+          curl -sf --max-time 5 "http://127.0.0.1:18901/lab?token=$JUPYTER_SMOKE_TOKEN" >/dev/null
+          echo "AMD64_HEALTH=PASS"
+          echo "AMD64_JUPYTERLAB_ROUTE=PASS"
+
+      - name: Python kernel smoke (bio packages + workspace write)
+        run: |
+          set -eu
+          docker exec -u jovyan "$CID" python3 -c "
+          import scanpy, anndata, h5py, pyarrow, numexpr, bottleneck, numpy
+          assert numpy.__version__.startswith('2.'), numpy.__version__
+          with open('/home/jovyan/.smoke_write', 'w') as f:
+              f.write('amd64 python kernel smoke')
+          print('AMD64_PYTHON_KERNEL=PASS')
+          "
+          docker exec -u jovyan "$CID" cat /home/jovyan/.smoke_write
+          echo "AMD64_WORKSPACE_WRITE=PASS"
+
+      - name: R kernel smoke (Seurat + Bioconductor)
+        run: |
+          set -eu
+          docker exec -u jovyan "$CID" Rscript -e "
+          library(Seurat); library(DESeq2); library(edgeR); library(limma)
+          writeLines('amd64 r kernel smoke', '/home/jovyan/.smoke_write_r')
+          cat('AMD64_R_KERNEL=PASS\n')
+          "
+          docker exec -u jovyan "$CID" cat /home/jovyan/.smoke_write_r
+
+      - name: Dump logs and clean up
+        if: always()
+        run: |
+          [ -n "${CID:-}" ] && docker logs "$CID" 2>&1 | tail -n 150 || true
+          [ -n "${CID:-}" ] && docker rm -f "$CID" >/dev/null 2>&1 || true
+
+  smoke_arm64:
+    name: Runtime smoke (native linux/arm64)
+    needs: [build_amd64, build_arm64, assemble_and_verify]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DIGEST: ${{ needs.build_arm64.outputs.digest }}
+      JUPYTER_SMOKE_TOKEN: ci-smoke-${{ github.run_id }}
+    steps:
+      - name: Assert native ARM64 runner
+        run: test "$(uname -m)" = aarch64
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull immutable ARM64 artifact by digest
+        run: |
+          set -eu
+          test -n "$DIGEST"
+          docker pull --platform linux/arm64 "$IMAGE@$DIGEST"
+
+      - name: Start container and assert reported architecture
+        run: |
+          set -eu
+          cid=$(docker run -d --platform linux/arm64 -p 18901:8888 \
+            -e JUPYTER_TOKEN="$JUPYTER_SMOKE_TOKEN" \
+            "$IMAGE@$DIGEST")
+          echo "CID=$cid" >> "$GITHUB_ENV"
+          reported_arch=$(docker exec "$cid" uname -m)
+          test "$reported_arch" = aarch64
+
+      - name: Wait for health, then probe token-gated API and /lab
+        run: |
+          set -eu
+          for _ in $(seq 1 30); do
+            if curl -sf --max-time 3 "http://127.0.0.1:18901/api?token=$JUPYTER_SMOKE_TOKEN" >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -sf --max-time 5 "http://127.0.0.1:18901/api?token=$JUPYTER_SMOKE_TOKEN" >/dev/null
+          curl -sf --max-time 5 "http://127.0.0.1:18901/lab?token=$JUPYTER_SMOKE_TOKEN" >/dev/null
+          echo "ARM64_HEALTH=PASS"
+          echo "ARM64_JUPYTERLAB_ROUTE=PASS"
+
+      - name: Python kernel smoke (bio packages + workspace write)
+        run: |
+          set -eu
+          docker exec -u jovyan "$CID" python3 -c "
+          import scanpy, anndata, h5py, pyarrow, numexpr, bottleneck, numpy
+          assert numpy.__version__.startswith('2.'), numpy.__version__
+          with open('/home/jovyan/.smoke_write', 'w') as f:
+              f.write('arm64 python kernel smoke')
+          print('ARM64_PYTHON_KERNEL=PASS')
+          "
+          docker exec -u jovyan "$CID" cat /home/jovyan/.smoke_write
+          echo "ARM64_WORKSPACE_WRITE=PASS"
+
+      - name: R kernel smoke (Seurat + Bioconductor)
+        run: |
+          set -eu
+          docker exec -u jovyan "$CID" Rscript -e "
+          library(Seurat); library(DESeq2); library(edgeR); library(limma)
+          writeLines('arm64 r kernel smoke', '/home/jovyan/.smoke_write_r')
+          cat('ARM64_R_KERNEL=PASS\n')
+          "
+          docker exec -u jovyan "$CID" cat /home/jovyan/.smoke_write_r
+
+      - name: Dump logs and clean up
+        if: always()
+        run: |
+          [ -n "${CID:-}" ] && docker logs "$CID" 2>&1 | tail -n 150 || true
+          [ -n "${CID:-}" ] && docker rm -f "$CID" >/dev/null 2>&1 || true
+
+  promote_latest:
+    name: Gated latest promotion
+    needs: [assemble_and_verify, smoke_amd64, smoke_arm64]
+    if: ${{ inputs.publish_latest == true }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Promote latest to the now fully-verified version tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:$VERSION"
+          echo "LATEST_PROMOTED_FROM=$VERSION"
