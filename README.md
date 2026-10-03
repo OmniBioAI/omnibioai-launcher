@@ -175,7 +175,7 @@ npm run build
 
 `npm run test:security` performs production builds with synthetic sentinels. It never uses real secrets.
 
-The main image is built by the repository workflow as `ghcr.io/omnibioai/omnibioai-launcher`. The repository also contains an explicit workflow for the VS Code runtime. This README does not claim JupyterLab or RStudio GHCR artifacts are published because no authoritative publishing workflow for those images is currently present.
+The main image is built by the repository workflow as `ghcr.io/omnibioai/omnibioai-launcher`. The repository also contains an explicit workflow for the VS Code and RStudio runtimes. This README does not claim JupyterLab GHCR artifacts are published because no authoritative publishing workflow for that image is currently present. RStudio's workflow exists but has not yet completed a controlled multiarch publication; do not treat its presence as proof of a published artifact.
 
 ## Current limitations and deferred work
 
