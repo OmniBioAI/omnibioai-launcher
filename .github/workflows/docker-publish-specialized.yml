@@ -23,6 +23,9 @@ jobs:
           - name: vscode
             file: docker/vscode/Dockerfile
             image: ghcr.io/omnibioai/omnibioai-vscode
+          - name: rstudio
+            file: docker/rstudio/Dockerfile
+            image: ghcr.io/omnibioai/omnibioai-rstudio
 
     steps:
       - uses: actions/checkout@v4
