@@ -264,5 +264,21 @@ describe('launcher Express API', () => {
       expect(serverModule.authoritativeIdentity({})).toBeNull();
       expect(serverModule.authoritativeIdentity(null)).toBeNull();
     });
+
+    test('workspace.launch alone (without platform.manage_infra) is sufficient to start, stop, and create a workspace -- a self-service permission, not platform-infra admin', async () => {
+      iamReply({ valid: true, user_id: 6, org_id: 1, permissions: ['workspace.launch'] });
+      dockerReply(200, { Id: 'container-1' });
+      expect((await requestApp('POST', '/api/launcher/start/jupyter', GOOD)).status).not.toBe(403);
+      dockerReply(200, {});
+      expect((await requestApp('POST', '/api/launcher/stop/jupyter', GOOD)).status).not.toBe(403);
+      expect((await requestApp('POST', '/api/launcher/v1/workspaces', GOOD)).status).not.toBe(403);
+    });
+
+    test('neither platform.manage_infra nor workspace.launch is still insufficient', async () => {
+      iamReply({ valid: true, user_id: 6, org_id: 1, permissions: ['dataset.read'] });
+      expect(await requestApp('POST', '/api/launcher/start/jupyter', GOOD)).toMatchObject({
+        status: 403, body: { error: 'insufficient permissions' },
+      });
+    });
   });
 });
