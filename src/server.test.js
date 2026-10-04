@@ -237,5 +237,32 @@ describe('launcher Express API', () => {
       expect(await requestApp('GET', '/api/launcher/v1/workspaces/private-workspace/manifest', GOOD)).toMatchObject({ status: 200 });
       serverModule.manifests.delete(key);
     });
+
+    test('a numeric user_id/org_id (the real shape omnibioai-auth/validate returns -- plain SQL integer primary keys, never stored as strings) is accepted, not rejected as lacking org context', async () => {
+      // Reproduces a real production bug: authoritativeIdentity used to
+      // require typeof === 'string' for both ids, which every real
+      // account with actual org membership fails (the field is also
+      // literally named org_id in the real response, not
+      // organization_id, but the fallback chain already covers that --
+      // this test is specifically about the numeric-vs-string type gap).
+      // platform.manage_infra so this request reaches
+      // requireAuthoritativeIdentity at all, rather than being rejected
+      // earlier for insufficient permissions and trivially passing this
+      // assertion for the wrong reason.
+      iamReply({ ...ADMIN, user_id: 6, org_id: 1 });
+      dockerReply(200, { Id: 'container-1' });
+      const response = await requestApp('POST', '/api/launcher/v1/workspaces', GOOD);
+      expect(response.body).not.toMatchObject({ error: 'authenticated IAM identity lacks user or organization context' });
+      expect(response.status).not.toBe(403);
+    });
+
+    test('authoritativeIdentity normalizes numeric ids to strings and still rejects 0/absent ids', () => {
+      expect(serverModule.authoritativeIdentity({ user_id: 6, org_id: 1 })).toEqual({ user_id: '6', organization_id: '1' });
+      expect(serverModule.authoritativeIdentity({ user_id: 'u1', organization_id: 'org-a' })).toEqual({ user_id: 'u1', organization_id: 'org-a' });
+      expect(serverModule.authoritativeIdentity({ user_id: 6 })).toBeNull();
+      expect(serverModule.authoritativeIdentity({ org_id: 1 })).toBeNull();
+      expect(serverModule.authoritativeIdentity({})).toBeNull();
+      expect(serverModule.authoritativeIdentity(null)).toBeNull();
+    });
   });
 });
