@@ -37,10 +37,23 @@ function manifestKey(identity, workspaceId) {
 }
 
 function authoritativeIdentity(identity) {
-  const userId = identity?.user_id || identity?.sub || identity?.id;
-  const organizationId = identity?.organization_id || identity?.org_id || identity?.tenant_id;
-  if (typeof userId !== 'string' || !userId || typeof organizationId !== 'string' || !organizationId) return null;
-  return { user_id: userId, organization_id: organizationId };
+  const userId = identity?.user_id ?? identity?.sub ?? identity?.id;
+  const organizationId = identity?.organization_id ?? identity?.org_id ?? identity?.tenant_id;
+  // omnibioai-auth's own /auth/validate returns user_id/org_id as JSON
+  // numbers (they're plain SQL integer primary keys, not stored as
+  // strings anywhere) -- accept either a string or a number here rather
+  // than demanding the caller's own type already be a string, then
+  // normalize to a string for manifestKey's template-literal key below
+  // (and everything else downstream that was already written assuming
+  // a string). 0 is a legitimate id and must not be treated as missing,
+  // so the emptiness check below is explicitly on the normalized string
+  // being non-empty, not on numeric truthiness.
+  const isIdLike = (v) => typeof v === 'string' || typeof v === 'number';
+  if (!isIdLike(userId) || !isIdLike(organizationId)) return null;
+  const normalizedUserId = String(userId);
+  const normalizedOrganizationId = String(organizationId);
+  if (!normalizedUserId || !normalizedOrganizationId) return null;
+  return { user_id: normalizedUserId, organization_id: normalizedOrganizationId };
 }
 
 async function verifyIdentity(authorization) {
