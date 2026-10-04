@@ -30,6 +30,15 @@ app.use((req, res, next) => {
 // cookie, so a foreign page cannot borrow a visitor's authority.
 const IAM_URL = process.env.IAM_URL || 'http://auth-service:8001';
 const CONTROL_PERMISSION = 'platform.manage_infra';
+// Launching/stopping/creating your own personal IDE workspace is a
+// self-service action, not platform-infrastructure administration --
+// workspace.launch (omnibioai-auth's permission registry) is grantable
+// to a regular role like scientist, unlike platform.manage_infra which
+// only admin/platform_admin ever hold. requireIdentity below accepts
+// either, so an admin account's existing manage_infra grant keeps
+// working unchanged.
+const WORKSPACE_LAUNCH_PERMISSION = 'workspace.launch';
+const CONTROL_PERMISSIONS = [CONTROL_PERMISSION, WORKSPACE_LAUNCH_PERMISSION];
 const manifests = new Map();
 
 function manifestKey(identity, workspaceId) {
@@ -77,10 +86,16 @@ async function verifyIdentity(authorization) {
 }
 
 function requireIdentity(permission) {
+  // `permission` may be a single name (every pre-existing call site) or
+  // an array of names where holding ANY one is sufficient (CONTROL_PERMISSIONS
+  // above) -- an admin's platform.manage_infra and a scientist's
+  // workspace.launch both satisfy the same gate, neither implies the other.
+  const required = Array.isArray(permission) ? permission : permission ? [permission] : [];
   return async (req, res, next) => {
     const result = await verifyIdentity(req.headers.authorization);
     if (result.denied) return res.status(result.denied).json({ error: result.error });
-    if (permission && !(result.identity.permissions || []).includes(permission)) {
+    const held = result.identity.permissions || [];
+    if (required.length > 0 && !required.some((p) => held.includes(p))) {
       return res.status(403).json({ error: 'insufficient permissions' });
     }
     req.identity = result.identity;
@@ -213,7 +228,7 @@ app.get('/api/launcher/status/:tool', requireIdentity(), async (req, res) => {
   }
 });
 
-app.post('/api/launcher/start/:tool', requireIdentity(CONTROL_PERMISSION), async (req, res) => {
+app.post('/api/launcher/start/:tool', requireIdentity(CONTROL_PERMISSIONS), async (req, res) => {
   const tool = TOOLS[req.params.tool];
   if (!tool) return res.status(400).json({ error: 'unknown tool' });
   try {
@@ -224,7 +239,7 @@ app.post('/api/launcher/start/:tool', requireIdentity(CONTROL_PERMISSION), async
   }
 });
 
-app.post('/api/launcher/stop/:tool', requireIdentity(CONTROL_PERMISSION), async (req, res) => {
+app.post('/api/launcher/stop/:tool', requireIdentity(CONTROL_PERMISSIONS), async (req, res) => {
   const tool = TOOLS[req.params.tool];
   if (!tool) return res.status(400).json({ error: 'unknown tool' });
   try {
@@ -251,7 +266,7 @@ app.post('/api/launcher/v1/workspaces/validate', requireIdentity(), (req, res) =
   } catch (error) { apiError(res, error); }
 });
 
-app.post('/api/launcher/v1/workspaces', requireIdentity(CONTROL_PERMISSION), async (req, res) => {
+app.post('/api/launcher/v1/workspaces', requireIdentity(CONTROL_PERMISSIONS), async (req, res) => {
   const identity = requireAuthoritativeIdentity(req, res);
   if (!identity) return;
   try {
@@ -305,7 +320,7 @@ app.get('/api/launcher/v1/workspaces/:workspaceId/manifest', requireIdentity(), 
   res.json(manifest);
 });
 
-app.post('/api/launcher/v1/workspaces/from-run', requireIdentity(CONTROL_PERMISSION), async (req, res) => {
+app.post('/api/launcher/v1/workspaces/from-run', requireIdentity(CONTROL_PERMISSIONS), async (req, res) => {
   const identity = requireAuthoritativeIdentity(req, res);
   if (!identity) return;
   try {
