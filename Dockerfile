@@ -1,8 +1,13 @@
+# OmniBioAI — Launcher (Jupyter Hardening)
+# Purpose: Build the React launcher UI with nginx and its Node.js API.
+# Author: Manish Kumar <manish@omnibioai.org>
+
 # ── Stage 1: Build React ───────────────────────────────────────────────────────
 FROM node:20-slim AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
+# Application source
 COPY . .
 # CRA inlines every REACT_APP_* variable into the PUBLIC JavaScript bundle at
 # build time (`npm run build`), not at container runtime. So only non-secret
@@ -15,6 +20,7 @@ COPY . .
 ARG REACT_APP_OMNIBIOAI_BASE_URL
 ARG REACT_APP_JUPYTER_BASE
 ARG REACT_APP_USE_MOCK
+# Build configuration
 ENV REACT_APP_OMNIBIOAI_BASE_URL=$REACT_APP_OMNIBIOAI_BASE_URL \
     REACT_APP_JUPYTER_BASE=$REACT_APP_JUPYTER_BASE \
     REACT_APP_USE_MOCK=$REACT_APP_USE_MOCK
@@ -22,6 +28,7 @@ RUN npm run build
 
 # ── Stage 2: nginx + node API server ──────────────────────────────────────────
 FROM node:20-alpine
+# System dependencies
 RUN apk add --no-cache nginx
 COPY --from=builder /app/build /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/http.d/default.conf
@@ -30,4 +37,5 @@ COPY lib /app/lib
 RUN echo '{"dependencies":{"express":"^4.18.0"}}' > /app/package.json && \
     cd /app && npm install --production
 EXPOSE 5190
+# Entrypoint and default command
 CMD sh -c "nginx && exec node /app/server.js"
