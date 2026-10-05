@@ -1,3 +1,7 @@
+# OmniBioAI — Launcher Jupyter (RStudio Release)
+# Purpose: Extend the Jupyter notebook image with Python and R bioinformatics packages.
+# Author: Manish Kumar <manish@omnibioai.org>
+
 # jupyter/datascience-notebook, tag r-4.3.1 / ubuntu-22.04 / lab-4.0.7 (same
 # manifest list). Pinned by digest for reproducibility; verified multi-arch
 # (linux/amd64 + linux/arm64) via Docker Hub manifest list on 2026-10-03.
@@ -5,6 +9,7 @@ FROM jupyter/datascience-notebook@sha256:476c6e673e7d5d8b5059f8680b1c6a988942a79
 
 USER root
 
+# Python dependencies
 RUN pip install --no-cache-dir \
       scanpy==1.11.5 \
       anndata==0.12.19 \
@@ -73,6 +78,7 @@ RUN R -e "install.packages('remotes', repos='https://cloud.r-project.org')" \
     && R -e "remotes::install_version('Seurat', version='5.0.0', repos='https://cloud.r-project.org', upgrade='never')" \
     && R -e "library(Seurat)"
 
+# Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD wget -qO- http://localhost:8888/api >/dev/null || exit 1
 
