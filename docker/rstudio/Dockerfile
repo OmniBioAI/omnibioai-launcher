@@ -1,3 +1,7 @@
+# OmniBioAI — Launcher RStudio
+# Purpose: Extend RStudio with R and Bioconductor analysis packages.
+# Author: Manish Kumar <manish@omnibioai.org>
+
 # Pin the upstream multi-platform index; both native amd64 and arm64 children
 # are present in this digest.
 FROM rocker/rstudio@sha256:2f48314dfffab8ac2e1bc1797b0564b1f96927f702c064ab2cc69ce1b1c62016
@@ -25,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgeos-dev \
     libproj-dev \
   && rm -rf /var/lib/apt/lists/*
+# R dependencies
 RUN R -e "install.packages(c('BiocManager','devtools'))"
 RUN R -e "BiocManager::install(c( \
   'DESeq2','edgeR','limma','Seurat', \
