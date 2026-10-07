@@ -66,7 +66,7 @@ describe('workspace profiles and specification', () => {
     expect(() => validateWorkspaceRequest({ ...request(), ...extra }, { identity })).toThrow(error);
   });
 
-  test.each(['lab', 'jupyter', '', 'JUPYTERLAB'])('rejects invalid IDE %p', (type) => {
+  test.each(['lab', 'jupyter', '', 'JUPYTERLAB'])('rejects invalid environment %p', (type) => {
     expect(() => validateWorkspaceRequest(request({ ide: { type } }), { identity })).toThrow(/IDE/);
   });
 
@@ -116,12 +116,22 @@ describe('environment resolution', () => {
     expect(() => resolver.resolve(validateWorkspaceRequest(request({ workspace: { profile: 'rna-seq' }, resources: { cpu: 1, memory_bytes: 512 * 1024 ** 2, gpu: 0, architecture: 'arm64' } }), { identity }))).toThrow(/no compatible/);
   });
 
+  test('resolves Terminal through the fixed VS Code workspace container', () => {
+    const spec = validateWorkspaceRequest(request({
+      ide: { type: 'terminal' },
+      resources: { ...request().resources, architecture: process.arch === 'arm64' ? 'arm64' : 'amd64' },
+    }), { identity });
+    const candidate = new ConfigEnvironmentResolver().resolve(spec);
+    expect(candidate.ide).toBe('terminal');
+    expect(candidate.container).toBe('omnibioai-vscode');
+  });
+
   test('rejects arbitrary configured containers and invalid configuration JSON', () => {
     expect(() => new ConfigEnvironmentResolver([{
       id: 'evil', ide: 'jupyterlab', container: 'host-root', architectures: ['amd64'], capabilities: ['python'], gpu_available: 0,
     }])).toThrow(/unsupported container/);
     expect(() => loadCandidates({ LAUNCHER_ENVIRONMENTS_JSON: '{' })).toThrow(/valid JSON/);
-    expect(builtInCandidates()).toHaveLength(3);
+    expect(builtInCandidates()).toHaveLength(4);
   });
 });
 

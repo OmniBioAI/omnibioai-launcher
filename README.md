@@ -13,13 +13,15 @@ Launcher is not Studio, an IAM service, a workflow engine, a registry, TES, Tool
 
 ## Architecture inventory
 
-- **Frontend:** Create React App / React 18 single-page UI. It browses Studio-owned `/api/dev/objects/*` routes, displays object details and lineage, opens JupyterLab/RStudio/VS Code, and exposes progressive workspace profile/resource controls.
+- **Frontend:** Create React App / React 18 single-page UI. It browses Studio-owned `/api/dev/objects/*` routes, displays object details and lineage, opens JupyterLab/RStudio/VS Code or the workspace Terminal, and exposes progressive workspace profile/resource controls.
 - **Backend:** a small Express server on port `3001`, reverse-proxied by the image's nginx server on port `5190`.
-- **Container model:** three fixed, pre-created containers: `omnibioai-jupyter`, `omnibioai-rstudio`, and `omnibioai-vscode`. Launcher does not accept container names, Docker arguments, mounts, devices, or privileged flags from clients.
+- **Container model:** three fixed, pre-created containers: `omnibioai-jupyter`, `omnibioai-rstudio`, and `omnibioai-vscode`. Terminal is a workspace-scoped interface backed by the existing VS Code Server container's integrated terminal; it does not create a host shell or a fourth container. Launcher does not accept container names, Docker arguments, mounts, devices, or privileged flags from clients.
 - **Docker integration:** HTTP over `DOCKER_SOCKET_PATH`; Studio normally supplies a restricted socket proxy. Legacy lifecycle routes inspect/start/stop containers. The v1 workspace route also applies validated CPU and memory limits before start.
 - **Authentication:** every Launcher backend route validates the caller's bearer token with IAM's `/auth/validate`. Missing/invalid credentials and IAM outages deny access.
 - **Authorization:** status/profile/manifest reads require a valid identity. Lifecycle mutations require `platform.manage_infra`. Manifest reads additionally match both authoritative user and organization identifiers.
 - **Studio integration:** Studio owns routing, the fixed IDE containers, their credentials/mounts, and the socket proxy. Launcher does not duplicate those responsibilities.
+
+Terminal means CLI access within the authorized workspace container and its existing project directory. It is not host shell access, Docker host access, Docker socket access, or a privileged infrastructure shell. It inherits the same IAM identity, organization/user context, profile, object-reference policy, compute limits, and storage boundary as the other workspace environments.
 
 ### UI visual source
 
@@ -35,7 +37,7 @@ The default page is the workspace builder. The existing object registry remains 
 | `POST` | `/api/launcher/start/:tool` | Start a fixed container |
 | `POST` | `/api/launcher/stop/:tool` | Stop a fixed container |
 
-`tool` remains `jupyter`, `rstudio`, or `vscode`. These routes and their response shapes are unchanged.
+The legacy `tool` values remain `jupyter`, `rstudio`, and `vscode`; those routes and response shapes are unchanged. Terminal uses the same lifecycle route shape with `tool=terminal` and resolves to the existing VS Code Server container.
 
 The frontend also consumes APIs owned by the configured OmniBioAI backend, not this Express server:
 
@@ -51,7 +53,7 @@ The workspace builder routes `/api/launcher/*` through this Launcher service's s
 
 `POST /api/launcher/v1/workspaces/validate` validates a request and resolves a compatible configured candidate without changing Docker state. `POST /api/launcher/v1/workspaces` validates, resolves, inspects the image architecture, applies bounded CPU/memory controls, starts the fixed container, and returns a manifest.
 
-The client may provide only workspace name/id/profile, IDE (`jupyterlab`, `rstudio`, or `vscode`), an optional exact image constraint, CPU, memory bytes, GPU count, architecture (`amd64` or `arm64`), and canonical object references.
+The client may provide only workspace name/id/profile, environment (`jupyterlab`, `rstudio`, `vscode`, or `terminal`), an optional exact image constraint, CPU, memory bytes, GPU count, architecture (`amd64` or `arm64`), and canonical object references.
 
 User and organization identity always come from verified IAM output. Unknown fields are rejected, including client-supplied identity, Docker arguments, mounts, devices, and privilege settings.
 
@@ -109,7 +111,7 @@ GPU requests never assume CUDA or inject a device request. They resolve only whe
 
 ### Reproducible manifests
 
-Successful v1 launches return a schema `1.0` manifest containing workspace/profile/IDE, resolved image and digest when available, architecture/resources, canonical object references, authoritative user and organization, timestamp, launcher version, candidate provenance, and allowlisted scalar environment metadata.
+Successful v1 launches return a schema `1.0` manifest containing workspace/profile/environment, resolved image and digest when available, architecture/resources, canonical object references, authoritative user and organization, timestamp, launcher version, candidate provenance, and allowlisted scalar environment metadata.
 
 `GET /api/launcher/v1/workspaces/:workspaceId/manifest` returns an in-memory manifest only to the same user in the same organization. Serialization/deserialization is strict and rejects secret-like fields. Tokens, passwords, credentials, API keys, arbitrary headers, and private keys are never manifest fields.
 

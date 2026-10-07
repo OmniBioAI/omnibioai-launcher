@@ -107,6 +107,9 @@ const TOOLS = {
   jupyter: { container: 'omnibioai-jupyter', port: 8888 },
   rstudio: { container: 'omnibioai-rstudio', port: 8787 },
   vscode:  { container: 'omnibioai-vscode',  port: 8083 },
+  // Terminal reuses VS Code Server's authenticated integrated terminal. It is
+  // an environment alias, not a new container or host-shell capability.
+  terminal: { container: 'omnibioai-vscode', port: 8083 },
 };
 
 // #54: talk to the docker-socket-proxy's exposed socket, not the raw

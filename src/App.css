@@ -582,7 +582,7 @@ button:disabled { cursor: not-allowed; }
 .is-selected .selection-mark { background: var(--accent); border-color: var(--accent); }
 .profile-skeleton { padding: 30px; color: var(--muted); border: 1px dashed var(--border2); border-radius: var(--radius); text-align: center; }
 
-.ide-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.ide-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .ide-choice { position: relative; display: flex; min-width: 0; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .ide-choice::before { content: ''; width: 3px; background: var(--ide-accent); opacity: .55; flex-shrink: 0; }
 .ide-choice.is-selected { border-color: color-mix(in srgb, var(--ide-accent) 55%, transparent); }

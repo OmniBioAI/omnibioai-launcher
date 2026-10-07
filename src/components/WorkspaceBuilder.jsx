@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { authHeaders } from '../session';
 
-const IDE_OPTIONS = [
+const ENVIRONMENT_OPTIONS = [
   { id: 'jupyterlab', tool: 'jupyter', label: 'JupyterLab', description: 'Interactive notebooks and scientific exploration.', accent: '#f37726', icon: '◉' },
   { id: 'rstudio', tool: 'rstudio', label: 'RStudio', description: 'R and Bioconductor development environment.', accent: '#276dc3', icon: 'R' },
   { id: 'vscode', tool: 'vscode', label: 'VS Code', description: 'Browser-based editor for Python, R, and workflows.', accent: '#007acc', icon: '⌁' },
+  { id: 'terminal', tool: 'terminal', label: 'Terminal', description: 'Shell access for CLI tools, scripts, and workflows.', accent: '#00e5a0', icon: '>_' },
 ];
 const OBJECT_REFERENCE = /^omnibioai:\/\/(dataset|workflow|model|run|tool)\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/;
 const SECRET_KEY = /(authorization|bearer|token|secret|password|passwd|credential|api[_-]?key|private[_-]?key|cookie)/i;
@@ -45,7 +46,7 @@ function ProfileCard({ profile, selected, onSelect }) {
   );
 }
 
-function IdeCard({ option, selected, status, onSelect, onOpen }) {
+function EnvironmentCard({ option, selected, status, onSelect, onOpen }) {
   const running = status === 'running';
   return (
     <div className={`ide-choice${selected ? ' is-selected' : ''}`} style={{ '--ide-accent': option.accent }}>
@@ -135,8 +136,8 @@ function ObjectReferenceEditor({ objects, onChange }) {
   );
 }
 
-function WorkspacePreview({ profile, ide, resources, objects, validation, validationState, manifest, manifestError }) {
-  const selectedIde = IDE_OPTIONS.find((option) => option.id === ide);
+function WorkspacePreview({ profile, environment, resources, objects, validation, validationState, manifest, manifestError }) {
+  const selectedEnvironment = ENVIRONMENT_OPTIONS.find((option) => option.id === environment);
   const effective = validation?.specification?.resources || resources;
   const displayedManifest = manifest ? safeForDisplay(manifest) : null;
   return (
@@ -147,7 +148,7 @@ function WorkspacePreview({ profile, ide, resources, objects, validation, valida
       </div>
       <dl className="review-list">
         <div><dt>Profile</dt><dd>{profile?.name || 'Select a profile'}</dd></div>
-        <div><dt>IDE</dt><dd>{selectedIde?.label || '—'}</dd></div>
+        <div><dt>Environment</dt><dd>{selectedEnvironment?.label || '—'}</dd></div>
         <div><dt>Architecture</dt><dd>{effective.architecture || 'Auto'}</dd></div>
         <div><dt>CPU</dt><dd>{effective.cpu ?? '—'}</dd></div>
         <div><dt>Memory</dt><dd>{formatMemory(effective.memory_bytes)}</dd></div>
@@ -182,10 +183,10 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
   const [profiles, setProfiles] = useState([]);
   const [limits, setLimits] = useState(null);
   const [profileId, setProfileId] = useState('');
-  const [ide, setIde] = useState('jupyterlab');
+  const [environment, setEnvironment] = useState('jupyterlab');
   const [resources, setResources] = useState({ cpu: 2, memory_bytes: 4 * 1024 ** 3, gpu: 0, architecture: '' });
   const [objects, setObjects] = useState([]);
-  const [statuses, setStatuses] = useState({ jupyter: 'unknown', rstudio: 'unknown', vscode: 'unknown' });
+  const [statuses, setStatuses] = useState({ jupyter: 'unknown', rstudio: 'unknown', vscode: 'unknown', terminal: 'unknown' });
   const [profilesError, setProfilesError] = useState('');
   const [validation, setValidation] = useState(null);
   const [validationFingerprint, setValidationFingerprint] = useState('');
@@ -228,7 +229,7 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
         if (available.length) {
           const initial = available.find((profile) => profile.id === 'generic-python') || available[0];
           setProfileId(initial.id);
-          setIde(initial.preferred_ide);
+          setEnvironment(initial.preferred_ide);
           setResources((current) => ({ ...current, ...profileResources(initial, payload.resource_limits), architecture: '' }));
         }
       })
@@ -237,7 +238,7 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
   }, [baseUrl]);
 
   const refreshStatuses = useCallback(async () => {
-    const results = await Promise.all(IDE_OPTIONS.map(async (option) => {
+    const results = await Promise.all(ENVIRONMENT_OPTIONS.map(async (option) => {
       try {
         const response = await fetch(`${baseUrl}/api/launcher/status/${option.tool}`, { headers: authHeaders() });
         const payload = await responseJson(response);
@@ -255,14 +256,14 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
 
   const selectProfile = (profile) => {
     setProfileId(profile.id);
-    setIde(profile.preferred_ide);
+    setEnvironment(profile.preferred_ide);
     setResources((current) => ({ ...current, ...profileResources(profile, limits) }));
     markDirty();
   };
 
   const requestBody = useCallback(() => ({
     workspace: { profile: profileId, name: selectedProfile ? `${selectedProfile.name} workspace` : 'Scientific workspace' },
-    ide: { type: ide },
+    ide: { type: environment },
     resources: {
       cpu: resources.cpu,
       memory_bytes: resources.memory_bytes,
@@ -270,7 +271,7 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
       ...(resources.architecture && { architecture: resources.architecture }),
     },
     objects: objects.map((object) => object.uri),
-  }), [ide, objects, profileId, resources, selectedProfile]);
+  }), [environment, objects, profileId, resources, selectedProfile]);
 
   const currentFingerprint = JSON.stringify(requestBody());
   latestRequestFingerprint.current = currentFingerprint;
@@ -327,7 +328,7 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
           setLaunchResult((current) => current ? { ...current, manifest: manifestPayload } : current);
         } catch (error) { setManifestError(error.message); }
       }
-      const tool = IDE_OPTIONS.find((option) => option.id === ide)?.tool;
+      const tool = ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.tool;
       if (tool) setStatuses((current) => ({ ...current, [tool]: 'running' }));
     } catch (error) { setLaunchError(error.message); }
     finally { launchInFlight.current = false; setLaunching(false); }
@@ -353,7 +354,7 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
   };
 
   const resourceMax = limits || { cpu: 16, memory_bytes: 64 * 1024 ** 3, gpu: 8 };
-  const selectedIdeLabel = IDE_OPTIONS.find((option) => option.id === ide)?.label;
+  const selectedEnvironmentLabel = ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.label;
   const launchSucceeded = Boolean(launchResult?.manifest);
   const validationState = validating ? 'Validating' : validationError ? 'Validation failed' : isValidated ? 'Validated' : 'Not validated';
 
@@ -366,7 +367,7 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
       <section className="workspace-intro">
         <div><span className="eyebrow">Scientific workspace</span><h1>Configure an analysis environment</h1><p>Choose a profile, attach approved OmniBioAI context, and review the effective environment before launch.</p></div>
         <div className="workflow-steps" aria-label="Workspace workflow">
-          {['Profile', 'IDE', 'Objects', 'Compute', 'Review', 'Launch'].map((step, index) => <span key={step}><b>{index + 1}</b>{step}</span>)}
+          {['Profile', 'Environment', 'Objects', 'Compute', 'Review', 'Launch'].map((step, index) => <span key={step}><b>{index + 1}</b>{step}</span>)}
         </div>
       </section>
 
@@ -379,9 +380,9 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
             <div className="profile-grid">{profiles.map((profile) => <ProfileCard key={profile.id} profile={profile} selected={profile.id === profileId} onSelect={selectProfile} />)}</div>
           </section>
 
-          <section className="config-panel" aria-labelledby="ide-heading">
-            <div className="panel-heading"><div><span className="step-number">02</span><h2 id="ide-heading">Select IDE</h2></div><span className="optional-label">Existing services</span></div>
-            <div className="ide-grid">{IDE_OPTIONS.map((option) => <IdeCard key={option.id} option={option} selected={ide === option.id} status={statuses[option.tool]} onSelect={(next) => { setIde(next); markDirty(); }} onOpen={onOpenIde} />)}</div>
+          <section className="config-panel" aria-labelledby="environment-heading">
+            <div className="panel-heading"><div><span className="step-number">02</span><h2 id="environment-heading">Select Environment</h2></div><span className="optional-label">Existing workspace services</span></div>
+            <div className="ide-grid">{ENVIRONMENT_OPTIONS.map((option) => <EnvironmentCard key={option.id} option={option} selected={environment === option.id} status={statuses[option.tool]} onSelect={(next) => { setEnvironment(next); markDirty(); }} onOpen={onOpenIde} />)}</div>
           </section>
 
           <section className="config-panel" aria-labelledby="objects-heading">
@@ -408,15 +409,15 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
         </div>
 
         <div className="workspace-review-column">
-          <WorkspacePreview profile={selectedProfile} ide={ide} resources={resources} objects={objects} validation={isValidated ? validation : null} validationState={validationState} manifest={launchResult?.manifest} manifestError={manifestError} />
+          <WorkspacePreview profile={selectedProfile} environment={environment} resources={resources} objects={objects} validation={isValidated ? validation : null} validationState={validationState} manifest={launchResult?.manifest} manifestError={manifestError} />
           <div className="launch-panel">
             {validationError && <div className="inline-message inline-message--error" role="alert">{validationError}</div>}
             {launchError && <div className="inline-message inline-message--error" role="alert">{launchError}</div>}
             {launchSucceeded && <div className="inline-message inline-message--success" role="status">Workspace {launchResult.workspace_id} is running.</div>}
             <button type="button" className="button button--secondary button--wide" disabled={validating || launching || !profileId} onClick={validate}>{validating ? 'Validating…' : 'Validate configuration'}</button>
             <button type="button" className="button button--primary button--wide" disabled={!isValidated || launching || validating || !profileId} onClick={launch}>{launching ? 'Launching workspace…' : 'Launch Workspace'}</button>
-            {launchSucceeded && <button type="button" className="button button--open button--wide" onClick={() => onOpenIde(ide)}>Open {IDE_OPTIONS.find((option) => option.id === ide)?.label} ↗</button>}
-            <p>Launch uses the fixed shared <strong>{selectedIdeLabel || 'IDE'}</strong> service and requires infrastructure permission.</p>
+            {launchSucceeded && <button type="button" className="button button--open button--wide" onClick={() => onOpenIde(environment)}>Open {ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.label} ↗</button>}
+            <p>Launch uses the fixed shared <strong>{selectedEnvironmentLabel || 'environment'}</strong> service and requires infrastructure permission.</p>
           </div>
         </div>
       </div>
@@ -424,4 +425,4 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
   );
 }
 
-export { OBJECT_REFERENCE, safeForDisplay };
+export { ENVIRONMENT_OPTIONS, OBJECT_REFERENCE, safeForDisplay };

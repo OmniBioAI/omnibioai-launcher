@@ -59,7 +59,7 @@ describe('WorkspaceBuilder', () => {
     expect(screen.getAllByText(/Generic Python|Generic R|RNA-seq|Single-cell|Variant analysis|Proteomics|ML\/AI development/)).toHaveLength(8);
     await userEvent.click(screen.getByRole('button', { name: /Generic R/i }));
     expect(screen.getByRole('button', { name: /Generic R/i })).toHaveAttribute('aria-pressed', 'true');
-    const ideSection = screen.getByRole('region', { name: 'Select IDE' });
+    const ideSection = screen.getByRole('region', { name: 'Select Environment' });
     expect(within(ideSection).getByText('RStudio').closest('button')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByLabelText('Workspace review')).toHaveTextContent('Generic R');
   });
@@ -81,6 +81,19 @@ describe('WorkspaceBuilder', () => {
     expect(screen.getByRole('button', { name: /VS Code Browser-based/i })).toHaveAttribute('aria-pressed', 'true');
     await userEvent.click(await screen.findByRole('button', { name: 'Open ↗' }));
     expect(onOpenIde).toHaveBeenCalledWith('jupyterlab');
+  });
+
+  test('renders Terminal alongside existing environments and includes it in the review', async () => {
+    installFetch();
+    await renderLoaded();
+    const environmentSection = screen.getByRole('region', { name: 'Select Environment' });
+    expect(within(environmentSection).getByText('JupyterLab')).toBeInTheDocument();
+    expect(within(environmentSection).getByText('RStudio')).toBeInTheDocument();
+    expect(within(environmentSection).getByText('VS Code')).toBeInTheDocument();
+    const terminalButton = within(environmentSection).getByRole('button', { name: /Terminal/ });
+    await userEvent.click(terminalButton);
+    expect(terminalButton).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('Workspace review')).toHaveTextContent('EnvironmentTerminal');
   });
 
   test('validates object references, attaches canonical context, and removes it', async () => {

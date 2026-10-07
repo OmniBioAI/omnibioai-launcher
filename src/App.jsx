@@ -933,6 +933,7 @@ function App() {
   const openWorkspaceIde = (ide) => {
     if (ide === 'jupyterlab') openUrl(`http://${jupyterHost}:8888/`);
     else if (ide === 'vscode') openUrl(`http://${HOST_IP}:8083`);
+    else if (ide === 'terminal') openUrl(`http://${HOST_IP}:8083`);
     else if (ide === 'rstudio') openUrl(`http://${HOST_IP}:8787`);
   };
 

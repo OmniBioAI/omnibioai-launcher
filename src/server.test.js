@@ -109,6 +109,9 @@ describe('launcher Express API', () => {
     expect(await requestApp('GET', '/api/launcher/status/rstudio', GOOD)).toMatchObject({ status: 200, body: { status: 'stopped' } });
     dockerReply(404, { message: 'missing' });
     expect(await requestApp('GET', '/api/launcher/status/jupyter', GOOD)).toMatchObject({ status: 200, body: { status: 'stopped' } });
+    dockerReply(200, { State: { Status: 'running' } });
+    expect(await requestApp('GET', '/api/launcher/status/terminal', GOOD)).toMatchObject({ status: 200, body: { status: 'running' } });
+    expect(mockDockerRequest).toHaveBeenCalledWith(expect.objectContaining({ path: '/containers/omnibioai-vscode/json', method: 'GET' }), expect.any(Function));
   });
 
   test('returns success for start/stop and reports Docker failures', async () => {
@@ -157,6 +160,7 @@ describe('launcher Express API', () => {
   describe('authentication (fails closed)', () => {
     const ROUTES = [
       ['GET', '/api/launcher/status/jupyter'], ['POST', '/api/launcher/start/jupyter'], ['POST', '/api/launcher/stop/jupyter'],
+      ['GET', '/api/launcher/status/terminal'], ['POST', '/api/launcher/start/terminal'], ['POST', '/api/launcher/stop/terminal'],
       ['GET', '/api/launcher/v1/profiles'], ['GET', '/api/launcher/v1/workspaces/example/manifest'],
       ['POST', '/api/launcher/v1/workspaces'], ['POST', '/api/launcher/v1/workspaces/from-run'],
     ];
