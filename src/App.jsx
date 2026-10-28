@@ -165,7 +165,13 @@ function ObjectRow({ obj, onSelect, isChild }) {
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Select ${obj.name || obj.object_type}`}
       onClick={() => onSelect(obj)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(obj); }
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -231,7 +237,13 @@ function GroupSection({ group, onSelect, groupMode, page, onLoadMore }) {
     <div style={{ marginBottom: label ? 20 : 0 }}>
       {label && (
         <div
+          role="button"
+          tabIndex={0}
+          aria-expanded={!collapsed}
           onClick={() => setCollapsed((c) => !c)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setCollapsed((c) => !c); }
+          }}
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '6px 4px', marginBottom: 8, cursor: 'pointer', userSelect: 'none',

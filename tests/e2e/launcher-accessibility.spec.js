@@ -7,6 +7,10 @@ const profiles = [
 ];
 
 async function mockLauncher(page) {
+  await page.route('**/api/dev/objects/**', (route) => route.fulfill({ json: {
+    objects: [{ object_id: 'dataset-42', name: 'Fixture dataset', object_type: 'DatasetObject', metadata: { status: 'done', size: '12 samples' } }],
+    count: 1, has_next: false,
+  } }));
   await page.route('**/api/launcher/**', async (route) => {
     const request = route.request();
     const url = request.url();
@@ -60,6 +64,11 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
       // 5. Browse is next to the object field and malformed URIs fail inline.
       const objectInput = page.getByLabel('OmniBioAI object reference');
       await expect(objectInput.locator('xpath=following-sibling::button[normalize-space()="Browse"]')).toBeVisible();
+      await page.getByRole('button', { name: 'Browse' }).click();
+      const picker = page.getByRole('dialog', { name: 'Choose an OmniBioAI object' });
+      await expect(picker.getByText('OmniBioAI Objects')).toBeVisible();
+      await picker.getByRole('button', { name: 'Select Fixture dataset' }).click();
+      await expect(page.getByLabel('Attached objects')).toContainText('dataset-42');
       await objectInput.fill('not-an-object');
       await expect(page.getByText(/Use omnibioai:\/\//)).toBeVisible();
 
@@ -70,7 +79,7 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
       }
 
       // 7. Visible small copy is >=12px and meets WCAG AA against its painted ancestor.
-      const failures = await page.locator('#main-content').evaluate((root) => {
+      const failures = await page.locator('body').evaluate((root) => {
         const parse = (value) => (value.match(/[\d.]+/g) || []).map(Number);
         const composite = (front, back) => front.length > 3 && front[3] < 1
           ? front.slice(0, 3).map((channel, index) => channel * front[3] + back[index] * (1 - front[3]))
@@ -97,7 +106,7 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
       });
       expect(failures).toEqual([]);
 
-      const undersized = await page.locator('#main-content button, #main-content input, #main-content select, #main-content summary, #main-content [role="radio"]').evaluateAll((elements) => elements.flatMap((element) => {
+      const undersized = await page.locator('body button, body input, body select, body summary, body [role="radio"], body [role="button"]').evaluateAll((elements) => elements.flatMap((element) => {
         if (element.disabled || getComputedStyle(element).display === 'none') return [];
         const box = element.getBoundingClientRect();
         return box.width < 44 || box.height < 44 ? [{ name: element.getAttribute('aria-label') || element.textContent.trim().slice(0, 30), width: box.width, height: box.height }] : [];
