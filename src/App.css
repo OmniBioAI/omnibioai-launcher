@@ -1,32 +1,17 @@
+@import './vendor/omnibioai-design-tokens.css';
+
 :root {
-  /* Local copy of @omnibioai/design-tokens v1 conventions. Kept local so the
-     embedded Launcher has no runtime dependency on a sibling repository. */
-  --bg: #0a0c10;
-  --bg2: #0f1217;
-  --bg3: #161b24;
-  --surface-2: #20243a;
-  --border: rgba(255, 255, 255, 0.07);
-  --border2: rgba(255, 255, 255, 0.12);
-  --accent: #00e5a0;
-  --accent-dim: rgba(0, 229, 160, 0.1);
-  --accent-border: rgba(0, 229, 160, 0.3);
-  --blue: #0094ff;
-  --blue-dim: rgba(0, 148, 255, 0.1);
-  --purple: #a855f7;
-  --text: #e8eaf0;
-  --text-secondary: #9ca3af;
-  --muted: #9aa3b2;
-  --danger: #ef4444;
-  --warning: #f59e0b;
-  --success: #22c55e;
-  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace;
-  --radius-xs: 4px;
-  --radius-sm: 6px;
-  --radius: 8px;
-  --radius-lg: 10px;
-  --radius-xl: 14px;
-  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.3);
+  --bg2: var(--color-bg-surface);
+  --bg3: var(--color-bg-surface2);
+  --surface-2: var(--color-bg-surface2);
+  --border: var(--color-border-muted);
+  --border2: var(--color-border);
+  --accent-dim: var(--color-accent-dim);
+  --accent-border: var(--color-accent-border);
+  --blue: var(--color-blue);
+  --blue-dim: var(--color-blue-dim);
+  --purple: var(--color-purple);
+  --muted: var(--color-text-muted);
 }
 
 * {
@@ -96,6 +81,8 @@ button:disabled { cursor: not-allowed; }
   justify-content: space-between;
   margin-bottom: 24px;
 }
+
+html[data-embedded="true"] .header { display: none; }
 
 .logo-wrap {
   display: flex;
