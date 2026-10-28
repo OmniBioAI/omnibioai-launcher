@@ -27,6 +27,7 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
       await mockLauncher(page);
       await page.goto('/');
       await expect(page.getByRole('radio', { name: /Generic Python/ })).toBeVisible();
+      await page.screenshot({ path: `/tmp/omnibioai-launcher-after-${viewport.width}.png`, fullPage: true });
     });
 
     test('covers launcher requirements 1–7, contrast, and target size', async ({ page }) => {
