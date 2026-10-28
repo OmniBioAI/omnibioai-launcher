@@ -46,7 +46,7 @@ async function renderLoaded(props = {}) {
   const onOpenIde = jest.fn();
   const onBrowseObjects = jest.fn();
   render(<WorkspaceBuilder baseUrl="" onOpenIde={onOpenIde} onBrowseObjects={onBrowseObjects} {...props} />);
-  await screen.findByRole('button', { name: /Generic Python/i });
+  await screen.findByRole('radio', { name: /Generic Python/i });
   return { onOpenIde, onBrowseObjects };
 }
 
@@ -57,10 +57,10 @@ describe('WorkspaceBuilder', () => {
     installFetch();
     await renderLoaded();
     expect(screen.getAllByText(/Generic Python|Generic R|RNA-seq|Single-cell|Variant analysis|Proteomics|ML\/AI development/)).toHaveLength(8);
-    await userEvent.click(screen.getByRole('button', { name: /Generic R/i }));
-    expect(screen.getByRole('button', { name: /Generic R/i })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(screen.getByRole('radio', { name: /Generic R/i }));
+    expect(screen.getByRole('radio', { name: /Generic R/i })).toHaveAttribute('aria-checked', 'true');
     const ideSection = screen.getByRole('region', { name: 'Select Environment' });
-    expect(within(ideSection).getByText('RStudio').closest('button')).toHaveAttribute('aria-pressed', 'true');
+    expect(within(ideSection).getByRole('radio', { name: /RStudio/ })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByLabelText('Workspace review')).toHaveTextContent('Generic R');
   });
 
@@ -71,14 +71,14 @@ describe('WorkspaceBuilder', () => {
       : jsonResponse({ status: 'stopped' }));
     render(<WorkspaceBuilder baseUrl="" onOpenIde={jest.fn()} onBrowseObjects={jest.fn()} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('authentication required');
-    expect(screen.queryByRole('button', { name: /Generic Python/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Generic Python/i })).not.toBeInTheDocument();
   });
 
   test('selects IDEs and preserves open behavior for a running legacy service', async () => {
     installFetch();
     const { onOpenIde } = await renderLoaded();
-    await userEvent.click(screen.getByRole('button', { name: /VS Code Browser-based/i }));
-    expect(screen.getByRole('button', { name: /VS Code Browser-based/i })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(screen.getByRole('radio', { name: /VS Code Browser-based/i }));
+    expect(screen.getByRole('radio', { name: /VS Code Browser-based/i })).toHaveAttribute('aria-checked', 'true');
     await userEvent.click(await screen.findByRole('button', { name: 'Open ↗' }));
     expect(onOpenIde).toHaveBeenCalledWith('jupyterlab');
   });
@@ -90,9 +90,9 @@ describe('WorkspaceBuilder', () => {
     expect(within(environmentSection).getByText('JupyterLab')).toBeInTheDocument();
     expect(within(environmentSection).getByText('RStudio')).toBeInTheDocument();
     expect(within(environmentSection).getByText('VS Code')).toBeInTheDocument();
-    const terminalButton = within(environmentSection).getByRole('button', { name: /Terminal/ });
+    const terminalButton = within(environmentSection).getByRole('radio', { name: /Terminal/ });
     await userEvent.click(terminalButton);
-    expect(terminalButton).toHaveAttribute('aria-pressed', 'true');
+    expect(terminalButton).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByLabelText('Workspace review')).toHaveTextContent('EnvironmentTerminal');
   });
 
@@ -116,7 +116,7 @@ describe('WorkspaceBuilder', () => {
     installFetch();
     await renderLoaded();
     fireEvent.change(screen.getByRole('slider', { name: 'CPU' }), { target: { value: '6' } });
-    fireEvent.change(screen.getByRole('slider', { name: 'Memory' }), { target: { value: String(8 * GiB) } });
+    fireEvent.change(screen.getByRole('slider', { name: 'Memory (GiB)' }), { target: { value: '8' } });
     fireEvent.change(screen.getByRole('slider', { name: 'GPU' }), { target: { value: '1' } });
     fireEvent.change(screen.getByLabelText('Architecture'), { target: { value: 'arm64' } });
     const review = screen.getByLabelText('Workspace review');
@@ -139,13 +139,17 @@ describe('WorkspaceBuilder', () => {
   });
 
   test('requires successful validation to launch and invalidates it on every configuration change', async () => {
-    installFetch();
+    const launchRequest = jest.fn(() => jsonResponse({ error: 'should not launch without validation' }, 500));
+    installFetch({ launch: launchRequest });
     await renderLoaded();
     const launch = screen.getByRole('button', { name: 'Launch Workspace' });
     expect(launch).toBeDisabled();
+    fireEvent.click(launch);
+    expect(launchRequest).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole('button', { name: 'Validate configuration' }));
     expect(await screen.findByText('Validated')).toBeInTheDocument();
     expect(launch).toBeEnabled();
+    expect(launchRequest).not.toHaveBeenCalled();
     fireEvent.change(screen.getByRole('slider', { name: 'CPU' }), { target: { value: '3' } });
     expect(screen.getByText('Not validated')).toBeInTheDocument();
     expect(launch).toBeDisabled();
@@ -238,7 +242,7 @@ describe('WorkspaceBuilder', () => {
   test('navigates to the existing object registry', async () => {
     installFetch();
     const { onBrowseObjects } = await renderLoaded();
-    await userEvent.click(screen.getByRole('button', { name: 'Browse object registry' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Browse' }));
     expect(onBrowseObjects).toHaveBeenCalledTimes(1);
   });
 });

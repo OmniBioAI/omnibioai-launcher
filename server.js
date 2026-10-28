@@ -253,6 +253,10 @@ app.post('/api/launcher/stop/:tool', requireIdentity(CONTROL_PERMISSIONS), async
   }
 });
 
+// Small liveness endpoint reachable through nginx's /api/launcher proxy. It
+// intentionally doesn't depend on IAM or Docker being available.
+app.get('/api/launcher/health', (_req, res) => res.json({ status: 'ok' }));
+
 // Versioned workspace APIs are additive. Legacy lifecycle routes above retain
 // their exact behavior for existing Studio consumers.
 app.get('/api/launcher/v1/profiles', requireIdentity(), (req, res) => {

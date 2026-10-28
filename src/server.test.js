@@ -23,12 +23,12 @@ jest.mock('http', () => {
 });
 const serverModule = require('../server');
 
-function requestApp(method, url, headers = {}) {
+function requestApp(method, url, headers = {}, body) {
   return new Promise((resolve) => {
     const req = new EventEmitter();
     // Node lowercases incoming header names; mirror that so the fake request behaves like a real one.
     const lowered = Object.fromEntries(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
-    Object.assign(req, { method, url, originalUrl: url, headers: lowered, connection: {} });
+    Object.assign(req, { method, url, originalUrl: url, headers: lowered, connection: {}, ...(body !== undefined && { body }) });
     const response = new EventEmitter();
     response.statusCode = 200;
     response.headers = {};
@@ -89,6 +89,13 @@ const PLAIN_USER = { valid: true, permissions: ['dataset.read'] };
 
 describe('launcher Express API', () => {
   beforeEach(() => { iamReply(ADMIN); });
+
+  test('health endpoint is available without IAM or Docker', async () => {
+    dockerReply(200, {});
+    expect(await requestApp('GET', '/api/launcher/health')).toMatchObject({ status: 200, body: { status: 'ok' } });
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(mockDockerRequest).not.toHaveBeenCalled();
+  });
 
   test('rejects unknown tools and handles CORS preflight', async () => {
     expect(await requestApp('GET', '/api/launcher/status/nope', GOOD)).toMatchObject({ status: 400, body: { error: 'unknown tool' } });
@@ -221,6 +228,37 @@ describe('launcher Express API', () => {
 
     test('authentication is checked before the tool is validated', async () => {
       expect(await requestApp('GET', '/api/launcher/status/nope')).toMatchObject({ status: 401 });
+    });
+
+    test('workspace launch requires a valid IAM token and reaches Docker only after authentication', async () => {
+      const workspace = {
+        workspace: { profile: 'generic-python', name: 'Auth-gated launch' },
+        ide: { type: 'jupyterlab' },
+        resources: { cpu: 2, memory_bytes: 4 * 1024 ** 3, gpu: 0, architecture: process.arch === 'arm64' ? 'arm64' : 'amd64' },
+      };
+
+      iamReply({ valid: false });
+      expect(await requestApp('POST', '/api/launcher/v1/workspaces', GOOD, workspace)).toMatchObject({ status: 401 });
+      expect(mockDockerRequest).not.toHaveBeenCalled();
+
+      iamReply({ valid: true, user_id: 6, org_id: 1, permissions: ['workspace.launch'] });
+      const digest = `sha256:${'a'.repeat(64)}`;
+      dockerReplySequence([
+        { statusCode: 200, body: { Image: digest, Config: { Image: 'registry.example.test/jupyter:1' }, State: { Running: false }, HostConfig: {} } },
+        { statusCode: 200, body: { Architecture: process.arch === 'arm64' ? 'arm64' : 'amd64', RepoDigests: [`registry.example.test/jupyter@${digest}`] } },
+        { statusCode: 200, body: {} },
+        { statusCode: 204, body: {} },
+      ]);
+
+      const response = await requestApp('POST', '/api/launcher/v1/workspaces', GOOD, workspace);
+      expect(response).toMatchObject({ status: 201, body: { status: 'started', manifest: { profile: 'generic-python', ide: 'jupyterlab' } } });
+      expect(mockDockerRequest.mock.calls.map(([options]) => [options.method, options.path])).toEqual([
+        ['GET', '/containers/omnibioai-jupyter/json'],
+        ['GET', `/images/${encodeURIComponent(digest)}/json`],
+        ['POST', '/containers/omnibioai-jupyter/update'],
+        ['POST', '/containers/omnibioai-jupyter/start'],
+      ]);
+      serverModule.manifests.clear();
     });
 
     test('resource translation emits only bounded Docker CPU and memory controls', () => {

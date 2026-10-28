@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import './App.css';
 import ObjectCard from './components/ObjectCard';
 import EnvCard from './components/EnvCard';
@@ -165,7 +165,13 @@ function ObjectRow({ obj, onSelect, isChild }) {
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Select ${obj.name || obj.object_type}`}
       onClick={() => onSelect(obj)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(obj); }
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -231,7 +237,13 @@ function GroupSection({ group, onSelect, groupMode, page, onLoadMore }) {
     <div style={{ marginBottom: label ? 20 : 0 }}>
       {label && (
         <div
+          role="button"
+          tabIndex={0}
+          aria-expanded={!collapsed}
           onClick={() => setCollapsed((c) => !c)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setCollapsed((c) => !c); }
+          }}
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '6px 4px', marginBottom: 8, cursor: 'pointer', userSelect: 'none',
@@ -834,6 +846,55 @@ function App() {
   const [selected, setSelected]             = useState('notebook');
   const [toast]                              = useState(null);
   const [modal, setModal]                   = useState(null);
+  const [objectPickerOpen, setObjectPickerOpen] = useState(false);
+  const [pickedWorkspaceObject, setPickedWorkspaceObject] = useState(null);
+  const browseButtonRef = useRef(null);
+  const objectPickerDialogRef = useRef(null);
+  const objectPickerWasOpen = useRef(false);
+
+  useEffect(() => {
+    if (!objectPickerOpen) {
+      if (objectPickerWasOpen.current) browseButtonRef.current?.focus();
+      objectPickerWasOpen.current = false;
+      return undefined;
+    }
+
+    objectPickerWasOpen.current = true;
+    const dialog = objectPickerDialogRef.current;
+    const getFocusable = () => Array.from(dialog?.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    ) || []).filter((element) => {
+      const style = window.getComputedStyle(element);
+      return style.display !== 'none' && style.visibility !== 'hidden';
+    });
+    getFocusable()[0]?.focus();
+
+    const onDialogKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setObjectPickerOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = getFocusable();
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onDialogKeyDown);
+    return () => document.removeEventListener('keydown', onDialogKeyDown);
+  }, [objectPickerOpen]);
 
   const openUrl = (url) => {
     console.log('[Launcher] openUrl called with:', url);
@@ -944,9 +1005,17 @@ function App() {
         <a className="skip-link" href="#main-content">Skip to workspace configuration</a>
         <WorkspaceBuilder
           baseUrl={launcherBaseUrl}
-          onBrowseObjects={() => setView('list')}
+          onBrowseObjects={() => setObjectPickerOpen(true)}
           onOpenIde={openWorkspaceIde}
+          pickedObject={pickedWorkspaceObject}
+          browseButtonRef={browseButtonRef}
         />
+        {objectPickerOpen && <div ref={objectPickerDialogRef} className="object-picker-overlay" role="dialog" aria-modal="true" aria-label="Choose an OmniBioAI object" tabIndex={-1}>
+          <ObjectSelector
+            onBack={() => setObjectPickerOpen(false)}
+            onSelect={(object) => { setPickedWorkspaceObject(object); setObjectPickerOpen(false); }}
+          />
+        </div>}
       </>
     );
   }
