@@ -37,7 +37,7 @@ describe('App', () => {
       return Promise.reject(new Error(`unexpected URL: ${url}`));
     });
     render(<App />);
-    expect(await screen.findByRole('button', { name: /Generic Python/i })).toBeInTheDocument();
+    expect(await screen.findByRole('radio', { name: /Generic Python/i })).toBeInTheDocument();
     expect(global.fetch).toHaveBeenCalledWith('/_svc/sdk/api/launcher/v1/profiles', expect.any(Object));
   });
 

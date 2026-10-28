@@ -26,14 +26,29 @@ function safeForDisplay(value) {
     .map(([key, child]) => [key, safeForDisplay(child)]));
 }
 
-function ProfileCard({ profile, selected, onSelect }) {
+function selectWithKeyboard(event, values, current, onSelect) {
+  const keys = ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'];
+  if (!keys.includes(event.key)) return;
+  event.preventDefault();
+  const currentIndex = Math.max(0, values.indexOf(current));
+  const nextIndex = event.key === 'Home' ? 0
+    : event.key === 'End' ? values.length - 1
+      : ['ArrowRight', 'ArrowDown'].includes(event.key) ? (currentIndex + 1) % values.length
+        : (currentIndex - 1 + values.length) % values.length;
+  onSelect(values[nextIndex]);
+  event.currentTarget.parentElement?.querySelectorAll('[role="radio"]')[nextIndex]?.focus();
+}
+
+function ProfileCard({ profile, selected, onSelect, profileIds }) {
   const resource = profile.resources || {};
   return (
-    <button
-      type="button"
+    <div
+      role="radio"
+      tabIndex={selected ? 0 : -1}
       className={`profile-card${selected ? ' is-selected' : ''}`}
-      aria-pressed={selected}
+      aria-checked={selected}
       onClick={() => onSelect(profile)}
+      onKeyDown={(event) => selectWithKeyboard(event, profileIds, profile.id, (id) => onSelect({ ...profile, id }))}
     >
       <span className="selection-mark" aria-hidden="true">{selected ? '✓' : ''}</span>
       <strong>{profile.name}</strong>
@@ -42,25 +57,40 @@ function ProfileCard({ profile, selected, onSelect }) {
         {resource.cpu} CPU · {formatMemory(resource.memory_bytes)}
         {profile.gpu_preference ? ' · GPU preferred, not guaranteed' : ''}
       </span>
-    </button>
+    </div>
   );
 }
 
-function EnvironmentCard({ option, selected, status, onSelect, onOpen }) {
-  const running = status === 'running';
+function EnvironmentCard({ option, selected, onSelect, environmentIds }) {
   return (
-    <div className={`ide-choice${selected ? ' is-selected' : ''}`} style={{ '--ide-accent': option.accent }}>
-      <button type="button" className="ide-choice-main" aria-pressed={selected} onClick={() => onSelect(option.id)}>
-        <span className="ide-choice-icon" aria-hidden="true">{option.icon}</span>
-        <span className="ide-choice-copy">
-          <strong>{option.label}</strong>
-          <span>{option.description}</span>
-        </span>
-        <StatusBadge status={status} />
-      </button>
-      {running && <button type="button" className="ide-open-link" onClick={() => onOpen(option.id)}>Open ↗</button>}
+    <div
+      role="radio"
+      tabIndex={selected ? 0 : -1}
+      aria-checked={selected}
+      className={`ide-choice${selected ? ' is-selected' : ''}`}
+      style={{ '--ide-accent': option.accent }}
+      onClick={() => onSelect(option.id)}
+      onKeyDown={(event) => selectWithKeyboard(event, environmentIds, option.id, onSelect)}
+    >
+      <span className="selection-mark" aria-hidden="true">{selected ? '✓' : ''}</span>
+      <span className="ide-choice-icon" aria-hidden="true">{option.icon}</span>
+      <span className="ide-choice-copy">
+        <strong>{option.label}</strong>
+        <span>{option.description}</span>
+      </span>
     </div>
   );
+}
+
+function ServiceCard({ option, status, onOpen }) {
+  const running = status === 'running';
+  return <article className="service-card" style={{ '--ide-accent': option.accent }}>
+    <span className="ide-choice-icon" aria-hidden="true">{option.icon}</span>
+    <div><strong>{option.label}</strong><StatusBadge status={status} /></div>
+    {running
+      ? <button type="button" className="button button--open" onClick={() => onOpen(option.id)}>Open ↗</button>
+      : <span className="service-unavailable">Not available to open</span>}
+  </article>;
 }
 
 function StatusBadge({ status = 'unknown' }) {
@@ -84,7 +114,7 @@ function profileResources(profile, limits) {
   };
 }
 
-function ObjectReferenceEditor({ objects, onChange }) {
+function ObjectReferenceEditor({ objects, onChange, onBrowseObjects }) {
   const [input, setInput] = useState('');
   const [error, setError] = useState('');
 
@@ -111,12 +141,17 @@ function ObjectReferenceEditor({ objects, onChange }) {
         <input
           id="object-reference"
           value={input}
-          onChange={(event) => { setInput(event.target.value); if (error) setError(''); }}
+          onChange={(event) => {
+            const value = event.target.value;
+            setInput(value);
+            setError(value.trim() && !OBJECT_REFERENCE.test(value.trim()) ? 'Use omnibioai://<type>/<id> (dataset, workflow, model, run, or tool).' : '');
+          }}
           onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); add(); } }}
           placeholder="omnibioai://dataset/<id>"
           aria-describedby={`object-reference-help${error ? ' object-reference-error' : ''}`}
           aria-invalid={Boolean(error)}
         />
+        <button type="button" className="button button--secondary" onClick={onBrowseObjects}>Browse</button>
         <button type="button" className="button button--secondary" onClick={add}>Attach</button>
       </div>
       <p id="object-reference-help" className="field-help">References provide context only. Access is still checked by IAM and the owning service.</p>
@@ -179,7 +214,7 @@ function WorkspacePreview({ profile, environment, resources, objects, validation
   );
 }
 
-export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }) {
+export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, pickedObject }) {
   const [profiles, setProfiles] = useState([]);
   const [limits, setLimits] = useState(null);
   const [profileId, setProfileId] = useState('');
@@ -212,6 +247,18 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
     setLaunchError('');
     setManifestError('');
   }, []);
+
+  useEffect(() => {
+    if (!pickedObject?.object_id) return;
+    const sourceType = String(pickedObject.object_type || '').toLowerCase();
+    const type = sourceType.includes('workflow') ? 'workflow'
+      : sourceType.includes('model') ? 'model'
+        : sourceType.includes('run') || sourceType.includes('job') ? 'run'
+          : sourceType.includes('tool') ? 'tool' : 'dataset';
+    const uri = `omnibioai://${type}/${pickedObject.object_id}`;
+    setObjects((current) => current.some((item) => item.uri === uri) ? current : [...current, { type, id: pickedObject.object_id, uri }]);
+    markDirty();
+  }, [pickedObject, markDirty]);
 
   useEffect(() => {
     let active = true;
@@ -362,14 +409,17 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
     <main id="main-content" className="workspace-shell">
       <header className="workspace-hero">
         <div className="brand-lockup"><span className="brand-mark">O</span><div><strong>OmniBioAI</strong><span>Workspace Launcher</span></div></div>
-        <button type="button" className="button button--ghost" onClick={onBrowseObjects}>Browse object registry</button>
       </header>
       <section className="workspace-intro">
-        <div><span className="eyebrow">Scientific workspace</span><h1>Configure an analysis environment</h1><p>Choose a profile, attach approved OmniBioAI context, and review the effective environment before launch.</p></div>
-        <div className="workflow-steps" aria-label="Workspace workflow">
-          {['Profile', 'Environment', 'Objects', 'Compute', 'Review', 'Launch'].map((step, index) => <span key={step}><b>{index + 1}</b>{step}</span>)}
-        </div>
+        <div><span className="eyebrow">Scientific workspace</span><h1>Workspace Launcher</h1><p>Open a running shared service, or configure and validate a new workspace launch.</p></div>
       </section>
+
+      <section className="services-section" aria-labelledby="services-heading">
+        <div className="section-heading"><div><span className="eyebrow">Available now</span><h2 id="services-heading">Running services</h2></div><p>Service status is independent from the new workspace configuration below.</p></div>
+        <div className="service-grid">{ENVIRONMENT_OPTIONS.map((option) => <ServiceCard key={option.id} option={option} status={statuses[option.tool]} onOpen={onOpenIde} />)}</div>
+      </section>
+
+      <div className="new-workspace-heading"><span className="eyebrow">Configure and launch</span><h2>New workspace</h2><p>Profile, environment, architecture, CPU, memory, and GPU affect validation and the shared container selected or updated by the Launcher.</p></div>
 
       <div className="workspace-layout">
         <div className="workspace-config">
@@ -377,25 +427,25 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
             <div className="panel-heading"><div><span className="step-number">01</span><h2 id="profile-heading">Choose Workspace Profile</h2></div><span className="optional-label">Required</span></div>
             {profilesError && <div className="inline-message inline-message--error" role="alert">{profilesError}</div>}
             {!profiles.length && !profilesError && <div className="profile-skeleton" aria-label="Loading workspace profiles">Loading profiles…</div>}
-            <div className="profile-grid">{profiles.map((profile) => <ProfileCard key={profile.id} profile={profile} selected={profile.id === profileId} onSelect={selectProfile} />)}</div>
+            <div className="profile-grid" role="radiogroup" aria-label="Workspace profile">{profiles.map((profile) => <ProfileCard key={profile.id} profile={profile} selected={profile.id === profileId} onSelect={(next) => selectProfile(profiles.find((item) => item.id === next.id) || profile)} profileIds={profiles.map((item) => item.id)} />)}</div>
           </section>
 
           <section className="config-panel" aria-labelledby="environment-heading">
-            <div className="panel-heading"><div><span className="step-number">02</span><h2 id="environment-heading">Select Environment</h2></div><span className="optional-label">Existing workspace services</span></div>
-            <div className="ide-grid">{ENVIRONMENT_OPTIONS.map((option) => <EnvironmentCard key={option.id} option={option} selected={environment === option.id} status={statuses[option.tool]} onSelect={(next) => { setEnvironment(next); markDirty(); }} onOpen={onOpenIde} />)}</div>
+            <div className="panel-heading"><div><span className="step-number">02</span><h2 id="environment-heading">Select Environment</h2></div><span className="optional-label">Required</span></div>
+            <div className="ide-grid" role="radiogroup" aria-label="Workspace environment">{ENVIRONMENT_OPTIONS.map((option) => <EnvironmentCard key={option.id} option={option} selected={environment === option.id} environmentIds={ENVIRONMENT_OPTIONS.map((item) => item.id)} onSelect={(next) => { setEnvironment(next); markDirty(); }} />)}</div>
           </section>
 
           <section className="config-panel" aria-labelledby="objects-heading">
             <div className="panel-heading"><div><span className="step-number">03</span><h2 id="objects-heading">Attach OmniBioAI Objects</h2></div><span className="optional-label">Optional</span></div>
-            <ObjectReferenceEditor objects={objects} onChange={(next) => { setObjects(next); markDirty(); }} />
+            <ObjectReferenceEditor objects={objects} onBrowseObjects={onBrowseObjects} onChange={(next) => { setObjects(next); markDirty(); }} />
           </section>
 
           <section className="config-panel" aria-labelledby="compute-heading">
             <div className="panel-heading"><div><span className="step-number">04</span><h2 id="compute-heading">Configure Compute</h2></div><span className="optional-label">Profile defaults applied</span></div>
             <div className="resource-grid">
-              <label><span>CPU <output>{resources.cpu}</output></span><input aria-label="CPU" type="range" min="0.25" max={resourceMax.cpu} step="0.25" value={resources.cpu} onChange={(event) => { setResources({ ...resources, cpu: Number(event.target.value) }); markDirty(); }} /></label>
-              <label><span>Memory <output>{formatMemory(resources.memory_bytes)}</output></span><input aria-label="Memory" type="range" min={256 * 1024 ** 2} max={resourceMax.memory_bytes} step={256 * 1024 ** 2} value={resources.memory_bytes} onChange={(event) => { setResources({ ...resources, memory_bytes: Number(event.target.value) }); markDirty(); }} /></label>
-              <label><span>GPU <output>{resources.gpu}</output></span><input aria-label="GPU" type="range" min="0" max={resourceMax.gpu} step="1" value={resources.gpu} disabled={resourceMax.gpu === 0} onChange={(event) => { setResources({ ...resources, gpu: Number(event.target.value) }); markDirty(); }} /><small>{resourceMax.gpu === 0 ? 'GPU requests are disabled in this deployment.' : 'Requested only; availability is verified at launch.'}</small></label>
+              <label><span id="cpu-label">CPU</span><div className="range-number"><input aria-labelledby="cpu-label" type="range" min="0.25" max={resourceMax.cpu} step="0.25" value={resources.cpu} onChange={(event) => { setResources({ ...resources, cpu: Number(event.target.value) }); markDirty(); }} /><input aria-label="CPU value" type="number" min="0.25" max={resourceMax.cpu} step="0.25" value={resources.cpu} onChange={(event) => { setResources({ ...resources, cpu: Number(event.target.value) }); markDirty(); }} /></div></label>
+              <label><span id="memory-label">Memory (GiB)</span><div className="range-number"><input aria-labelledby="memory-label" type="range" min="0.25" max={resourceMax.memory_bytes / 1024 ** 3} step="0.25" value={resources.memory_bytes / 1024 ** 3} onChange={(event) => { setResources({ ...resources, memory_bytes: Number(event.target.value) * 1024 ** 3 }); markDirty(); }} /><input aria-label="Memory value in GiB" type="number" min="0.25" max={resourceMax.memory_bytes / 1024 ** 3} step="0.25" value={resources.memory_bytes / 1024 ** 3} onChange={(event) => { setResources({ ...resources, memory_bytes: Number(event.target.value) * 1024 ** 3 }); markDirty(); }} /></div></label>
+              <label><span id="gpu-label">GPU</span><div className="range-number"><input aria-labelledby="gpu-label" type="range" min="0" max={resourceMax.gpu} step="1" value={resources.gpu} disabled={resourceMax.gpu === 0} onChange={(event) => { setResources({ ...resources, gpu: Number(event.target.value) }); markDirty(); }} /><input aria-label="GPU value" type="number" min="0" max={resourceMax.gpu} step="1" value={resources.gpu} disabled={resourceMax.gpu === 0} onChange={(event) => { setResources({ ...resources, gpu: Number(event.target.value) }); markDirty(); }} /></div><small>{resourceMax.gpu === 0 ? 'GPU requests are disabled in this deployment.' : 'Requested only; availability is verified at launch.'}</small></label>
               <label><span>Architecture</span><select aria-label="Architecture" value={resources.architecture} onChange={(event) => { setResources({ ...resources, architecture: event.target.value }); markDirty(); }}><option value="">Auto</option><option value="amd64">amd64</option><option value="arm64">arm64</option></select></label>
             </div>
             <details className="advanced-details"><summary>Advanced resource details</summary><p>Server limits: up to {resourceMax.cpu} CPU, {formatMemory(resourceMax.memory_bytes)} memory, and {resourceMax.gpu} requested GPUs. Docker compatibility and actual GPU allocation are verified server-side.</p></details>
@@ -417,7 +467,7 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde }
             <button type="button" className="button button--secondary button--wide" disabled={validating || launching || !profileId} onClick={validate}>{validating ? 'Validating…' : 'Validate configuration'}</button>
             <button type="button" className="button button--primary button--wide" disabled={!isValidated || launching || validating || !profileId} onClick={launch}>{launching ? 'Launching workspace…' : 'Launch Workspace'}</button>
             {launchSucceeded && <button type="button" className="button button--open button--wide" onClick={() => onOpenIde(environment)}>Open {ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.label} ↗</button>}
-            <p>Launch uses the fixed shared <strong>{selectedEnvironmentLabel || 'environment'}</strong> service and requires infrastructure permission.</p>
+            <p>Launch validates the request, applies CPU and memory limits to the selected shared <strong>{selectedEnvironmentLabel || 'environment'}</strong> container, verifies architecture and GPU compatibility, then starts that service. It requires workspace launch permission.</p>
           </div>
         </div>
       </div>

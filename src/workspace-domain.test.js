@@ -57,6 +57,18 @@ describe('workspace profiles and specification', () => {
     expect(spec.provenance).toEqual({ created_at: '2026-10-01T12:00:00.000Z', launcher_version: '0.1.0' });
   });
 
+  test('rejects unsupported profiles and compute requests beyond the configured limits', () => {
+    const limits = { cpu: 8, memory_bytes: 16 * 1024 ** 3, gpu: 1 };
+    expect(() => validateWorkspaceRequest(request({ workspace: { profile: 'admin-shell' } }), { identity, limits }))
+      .toThrow(/unsupported workspace profile/);
+    expect(() => validateWorkspaceRequest(request({ resources: { cpu: 8.5, memory_bytes: 4 * 1024 ** 3, gpu: 0, architecture: 'amd64' } }), { identity, limits }))
+      .toThrow(/resources\.cpu/);
+    expect(() => validateWorkspaceRequest(request({ resources: { cpu: 2, memory_bytes: 17 * 1024 ** 3, gpu: 0, architecture: 'amd64' } }), { identity, limits }))
+      .toThrow(/resources\.memory_bytes/);
+    expect(() => validateWorkspaceRequest(request({ resources: { cpu: 2, memory_bytes: 4 * 1024 ** 3, gpu: 2, architecture: 'amd64' } }), { identity, limits }))
+      .toThrow(/resources\.gpu/);
+  });
+
   test.each([
     [{ identity: { user_id: 'attacker', organization_id: 'other' } }, /unsupported fields/],
     [{ privileged: true }, /unsupported fields/],

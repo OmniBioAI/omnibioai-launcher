@@ -834,6 +834,8 @@ function App() {
   const [selected, setSelected]             = useState('notebook');
   const [toast]                              = useState(null);
   const [modal, setModal]                   = useState(null);
+  const [objectPickerOpen, setObjectPickerOpen] = useState(false);
+  const [pickedWorkspaceObject, setPickedWorkspaceObject] = useState(null);
 
   const openUrl = (url) => {
     console.log('[Launcher] openUrl called with:', url);
@@ -944,9 +946,16 @@ function App() {
         <a className="skip-link" href="#main-content">Skip to workspace configuration</a>
         <WorkspaceBuilder
           baseUrl={launcherBaseUrl}
-          onBrowseObjects={() => setView('list')}
+          onBrowseObjects={() => setObjectPickerOpen(true)}
           onOpenIde={openWorkspaceIde}
+          pickedObject={pickedWorkspaceObject}
         />
+        {objectPickerOpen && <div className="object-picker-overlay" role="dialog" aria-modal="true" aria-label="Choose an OmniBioAI object">
+          <ObjectSelector
+            onBack={() => setObjectPickerOpen(false)}
+            onSelect={(object) => { setPickedWorkspaceObject(object); setObjectPickerOpen(false); }}
+          />
+        </div>}
       </>
     );
   }
