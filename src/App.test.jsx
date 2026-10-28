@@ -41,6 +41,36 @@ describe('App', () => {
     expect(global.fetch).toHaveBeenCalledWith('/_svc/sdk/api/launcher/v1/profiles', expect.any(Object));
   });
 
+  test('object picker closes on Escape, traps Tab focus, and restores focus to Browse', async () => {
+    window.history.replaceState({}, '', '/_svc/sdk');
+    global.fetch = jest.fn((url) => {
+      if (url.endsWith('/api/launcher/v1/profiles')) return Promise.resolve({ ok: true, json: async () => ({ profiles: [{ id: 'generic-python', name: 'Generic Python', preferred_ide: 'jupyterlab', resources: { cpu: 2, memory_bytes: 4 * 1024 ** 3, gpu: 0 } }], resource_limits: { cpu: 8, memory_bytes: 8 * 1024 ** 3, gpu: 0 } }) });
+      if (url.includes('/api/launcher/status/')) return Promise.resolve({ ok: true, json: async () => ({ status: 'stopped' }) });
+      if (url.includes('/api/dev/objects/?')) return Promise.resolve({ ok: true, json: async () => ({ objects: [object], count: 1, has_next: false }) });
+      return Promise.reject(new Error(`unexpected URL: ${url}`));
+    });
+
+    render(<App />);
+    const browse = await screen.findByRole('button', { name: 'Browse' });
+    await userEvent.click(browse);
+    const dialog = screen.getByRole('dialog', { name: 'Choose an OmniBioAI object' });
+    const focusable = () => Array.from(dialog.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    ));
+    const first = focusable()[0];
+    const last = focusable().at(-1);
+    expect(first).toHaveFocus();
+
+    fireEvent.keyDown(last, { key: 'Tab' });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
+    expect(last).toHaveFocus();
+
+    fireEvent.keyDown(document.activeElement, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Choose an OmniBioAI object' })).not.toBeInTheDocument();
+    expect(browse).toHaveFocus();
+  });
+
   test('loads the object list, filters/groups it, and opens details', async () => {
     render(<App />);
     expect(screen.getByText('Loading objects…')).toBeInTheDocument();

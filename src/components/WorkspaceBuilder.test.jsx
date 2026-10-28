@@ -139,13 +139,17 @@ describe('WorkspaceBuilder', () => {
   });
 
   test('requires successful validation to launch and invalidates it on every configuration change', async () => {
-    installFetch();
+    const launchRequest = jest.fn(() => jsonResponse({ error: 'should not launch without validation' }, 500));
+    installFetch({ launch: launchRequest });
     await renderLoaded();
     const launch = screen.getByRole('button', { name: 'Launch Workspace' });
     expect(launch).toBeDisabled();
+    fireEvent.click(launch);
+    expect(launchRequest).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole('button', { name: 'Validate configuration' }));
     expect(await screen.findByText('Validated')).toBeInTheDocument();
     expect(launch).toBeEnabled();
+    expect(launchRequest).not.toHaveBeenCalled();
     fireEvent.change(screen.getByRole('slider', { name: 'CPU' }), { target: { value: '3' } });
     expect(screen.getByText('Not validated')).toBeInTheDocument();
     expect(launch).toBeDisabled();

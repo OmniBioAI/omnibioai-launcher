@@ -114,7 +114,7 @@ function profileResources(profile, limits) {
   };
 }
 
-function ObjectReferenceEditor({ objects, onChange, onBrowseObjects }) {
+function ObjectReferenceEditor({ objects, onChange, onBrowseObjects, browseButtonRef }) {
   const [input, setInput] = useState('');
   const [error, setError] = useState('');
 
@@ -151,7 +151,7 @@ function ObjectReferenceEditor({ objects, onChange, onBrowseObjects }) {
           aria-describedby={`object-reference-help${error ? ' object-reference-error' : ''}`}
           aria-invalid={Boolean(error)}
         />
-        <button type="button" className="button button--secondary" onClick={onBrowseObjects}>Browse</button>
+        <button ref={browseButtonRef} type="button" className="button button--secondary" onClick={onBrowseObjects}>Browse</button>
         <button type="button" className="button button--secondary" onClick={add}>Attach</button>
       </div>
       <p id="object-reference-help" className="field-help">References provide context only. Access is still checked by IAM and the owning service.</p>
@@ -214,7 +214,7 @@ function WorkspacePreview({ profile, environment, resources, objects, validation
   );
 }
 
-export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, pickedObject }) {
+export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, pickedObject, browseButtonRef }) {
   const [profiles, setProfiles] = useState([]);
   const [limits, setLimits] = useState(null);
   const [profileId, setProfileId] = useState('');
@@ -437,7 +437,7 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
 
           <section className="config-panel" aria-labelledby="objects-heading">
             <div className="panel-heading"><div><span className="step-number">03</span><h2 id="objects-heading">Attach OmniBioAI Objects</h2></div><span className="optional-label">Optional</span></div>
-            <ObjectReferenceEditor objects={objects} onBrowseObjects={onBrowseObjects} onChange={(next) => { setObjects(next); markDirty(); }} />
+            <ObjectReferenceEditor objects={objects} onBrowseObjects={onBrowseObjects} browseButtonRef={browseButtonRef} onChange={(next) => { setObjects(next); markDirty(); }} />
           </section>
 
           <section className="config-panel" aria-labelledby="compute-heading">
