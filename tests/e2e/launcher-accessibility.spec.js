@@ -96,6 +96,42 @@ async function auditRegionsContrast(page, selector) {
   });
 }
 
+async function expectSelectedCardsUseAccent(page, theme, accent, expectedRgb) {
+  await page.goto(`/?obai_theme=${theme}&obai_accent=${accent}`);
+  await page.getByRole('radio', { name: /Generic Python/ }).click();
+  const colors = await page.evaluate(() => {
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--color-accent)';
+    document.body.appendChild(probe);
+    const accent = getComputedStyle(probe).color;
+    probe.remove();
+    return {
+      accent,
+      cards: [...document.querySelectorAll('.profile-card.is-selected, .ide-choice.is-selected')].map((card) => ({
+        background: getComputedStyle(card).backgroundColor,
+        border: getComputedStyle(card).borderTopColor,
+      })),
+    };
+  });
+  const channels = (color) => {
+    const values = (color.match(/[\d.]+/g) || []).map(Number);
+    return color.startsWith('color(srgb ') ? values.map((value, index) => (index < 3 ? value * 255 : value)) : values;
+  };
+  const assertRgb = (color, expected, alpha) => {
+    const actual = channels(color);
+    expect(actual.length).toBeGreaterThanOrEqual(3);
+    actual.slice(0, 3).forEach((channel, index) => expect(Math.abs(channel - expected[index])).toBeLessThanOrEqual(1));
+    if (alpha !== undefined) expect(actual[3]).toBeCloseTo(alpha, 2);
+  };
+
+  expect(colors.cards).toHaveLength(2);
+  assertRgb(colors.accent, expectedRgb);
+  for (const card of colors.cards) {
+    assertRgb(card.background, expectedRgb, theme === 'light' ? 0.12 : 0.2);
+    assertRgb(card.border, expectedRgb, theme === 'light' ? 0.45 : 0.7);
+  }
+}
+
 for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
   for (const theme of ['dark', 'light']) {
     test.describe(`${viewport.width}px launcher — ${theme} theme`, () => {
@@ -192,32 +228,12 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
 test('light purple object view, toast, install modal, and embedded header keep token contrast', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await mockLauncher(page);
-  await page.goto('/?obai_theme=light&obai_accent=purple');
-  await page.getByRole('radio', { name: /Generic Python/ }).click();
-  const selectedCardColors = await page.evaluate(() => {
-    const normalize = (value) => {
-      const probe = document.createElement('span');
-      probe.style.backgroundColor = value;
-      document.body.appendChild(probe);
-      const color = getComputedStyle(probe).backgroundColor;
-      probe.remove();
-      return color;
-    };
-    const root = getComputedStyle(document.documentElement);
-    return {
-      dim: normalize(root.getPropertyValue('--color-accent-dim')),
-      border: normalize(root.getPropertyValue('--color-accent-border')),
-      cards: [...document.querySelectorAll('.profile-card.is-selected, .ide-choice.is-selected')].map((card) => ({
-        background: getComputedStyle(card).backgroundColor,
-        border: getComputedStyle(card).borderTopColor,
-      })),
-    };
-  });
-  expect(selectedCardColors.cards).toHaveLength(2);
-  for (const card of selectedCardColors.cards) {
-    expect(card.background).toBe(selectedCardColors.dim);
-    expect(card.border).toBe(selectedCardColors.border);
-  }
+  await expectSelectedCardsUseAccent(page, 'light', 'purple', [112, 48, 160]);
+  await expectSelectedCardsUseAccent(page, 'light', 'blue', [20, 91, 181]);
+  await expectSelectedCardsUseAccent(page, 'light', 'orange', [163, 65, 0]);
+  await expectSelectedCardsUseAccent(page, 'dark', 'purple', [192, 132, 252]);
+  await expectSelectedCardsUseAccent(page, 'dark', 'blue', [117, 184, 255]);
+  await expectSelectedCardsUseAccent(page, 'dark', 'orange', [255, 178, 107]);
 
   await page.goto('/?object_id=test&obai_theme=light&obai_accent=purple');
   await expect(page.locator('.object-card')).toContainText('TCGA-BRCA');
