@@ -24,6 +24,10 @@
 :root[data-theme="dark"][data-accent="blue"] { --color-accent: #75b8ff; --color-accent-dim: rgba(117,184,255,.20); --color-accent-border: rgba(117,184,255,.7); --color-on-accent: #00101f; }
 :root[data-theme="dark"][data-accent="purple"] { --color-accent: #c084fc; --color-accent-dim: rgba(192,132,252,.20); --color-accent-border: rgba(192,132,252,.7); --color-on-accent: #1a0828; }
 :root[data-theme="dark"][data-accent="orange"] { --color-accent: #ffb26b; --color-accent-dim: rgba(255,178,107,.20); --color-accent-border: rgba(255,178,107,.7); --color-on-accent: #241000; }
+:root[data-theme="light"][data-accent="teal"] { --color-accent-dim: color-mix(in srgb, var(--color-accent) 12%, transparent); --color-accent-border: color-mix(in srgb, var(--color-accent) 45%, transparent); --color-accent-surface: color-mix(in srgb, var(--color-accent) 8%, transparent); }
+:root[data-theme="light"][data-accent="blue"] { --color-accent-dim: color-mix(in srgb, var(--color-accent) 12%, transparent); --color-accent-border: color-mix(in srgb, var(--color-accent) 45%, transparent); --color-accent-surface: color-mix(in srgb, var(--color-accent) 8%, transparent); }
+:root[data-theme="light"][data-accent="purple"] { --color-accent-dim: color-mix(in srgb, var(--color-accent) 12%, transparent); --color-accent-border: color-mix(in srgb, var(--color-accent) 45%, transparent); --color-accent-surface: color-mix(in srgb, var(--color-accent) 8%, transparent); }
+:root[data-theme="light"][data-accent="orange"] { --color-accent-dim: color-mix(in srgb, var(--color-accent) 12%, transparent); --color-accent-border: color-mix(in srgb, var(--color-accent) 45%, transparent); --color-accent-surface: color-mix(in srgb, var(--color-accent) 8%, transparent); }
 /* color-token-mapping:end */
 
 * {
@@ -289,7 +293,7 @@ html[data-embedded="true"] .brand-lockup { display: none; }
   display: inline-block;
   margin-top: 8px;
   background: var(--color-accent-dim);
-  color: var(--color-text-muted);
+  color: var(--text);
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 20px;
@@ -694,7 +698,8 @@ html[data-embedded="true"] .brand-lockup { display: none; }
 .button--secondary { background: var(--bg2); border: 1px solid var(--border2); color: var(--text-secondary); white-space: nowrap; }
 .button--secondary:hover:not(:disabled), .button--ghost:hover:not(:disabled) { border-color: var(--accent-border); color: var(--accent); }
 .button--ghost { background: transparent; border: 1px solid var(--border2); color: var(--muted); }
-.button--open { min-height: 44px; background: var(--accent-dim); border: 1px solid var(--accent-border); color: var(--accent); }
+.button--open { min-height: 44px; background: var(--bg2); border: 1px solid var(--border2); color: var(--text-secondary); }
+.button--open:hover:not(:disabled) { background: var(--bg-surface3); border-color: var(--border2); color: var(--text); }
 .button--wide { width: 100%; }
 .inline-message { padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; line-height: 1.45; }
 .inline-message--error { color: var(--color-danger); border-color: var(--color-danger-border); background: color-mix(in srgb, var(--color-danger) 12%, transparent); }
