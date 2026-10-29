@@ -192,6 +192,33 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
 test('light purple object view, toast, install modal, and embedded header keep token contrast', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await mockLauncher(page);
+  await page.goto('/?obai_theme=light&obai_accent=purple');
+  await page.getByRole('radio', { name: /Generic Python/ }).click();
+  const selectedCardColors = await page.evaluate(() => {
+    const normalize = (value) => {
+      const probe = document.createElement('span');
+      probe.style.backgroundColor = value;
+      document.body.appendChild(probe);
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    };
+    const root = getComputedStyle(document.documentElement);
+    return {
+      dim: normalize(root.getPropertyValue('--color-accent-dim')),
+      border: normalize(root.getPropertyValue('--color-accent-border')),
+      cards: [...document.querySelectorAll('.profile-card.is-selected, .ide-choice.is-selected')].map((card) => ({
+        background: getComputedStyle(card).backgroundColor,
+        border: getComputedStyle(card).borderTopColor,
+      })),
+    };
+  });
+  expect(selectedCardColors.cards).toHaveLength(2);
+  for (const card of selectedCardColors.cards) {
+    expect(card.background).toBe(selectedCardColors.dim);
+    expect(card.border).toBe(selectedCardColors.border);
+  }
+
   await page.goto('/?object_id=test&obai_theme=light&obai_accent=purple');
   await expect(page.locator('.object-card')).toContainText('TCGA-BRCA');
   await expect(page.getByRole('button', { name: 'Open in JupyterLab' })).toBeVisible();
