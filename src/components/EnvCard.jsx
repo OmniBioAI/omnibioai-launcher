@@ -56,7 +56,7 @@ function EnvCard({ type, title, description, selected, onClick }) {
       tabIndex={0}
       onKeyDown={(e) => e.key === 'Enter' && onClick()}
     >
-      <div className="env-icon" style={{ background: ICON_BG[type] }}>
+      <div className="env-icon" style={{ background: ICON_BG[type] }} aria-hidden="true">
         {ICONS[type]}
       </div>
       <div className="env-title">{title}</div>
