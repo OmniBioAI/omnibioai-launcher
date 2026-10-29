@@ -844,7 +844,7 @@ function App() {
   const [loading, setLoading]               = useState(false);
   const [fetchError, setFetchError]         = useState(null);
   const [selected, setSelected]             = useState('notebook');
-  const [toast]                              = useState(null);
+  const [toast, setToast]                   = useState(null);
   const [modal, setModal]                   = useState(null);
   const [objectPickerOpen, setObjectPickerOpen] = useState(false);
   const [pickedWorkspaceObject, setPickedWorkspaceObject] = useState(null);
@@ -988,6 +988,8 @@ function App() {
 
   const handleCardClick = (type) => {
     setSelected(type);
+    const label = { notebook: 'Notebook', vscode: 'VS Code', r: 'RStudio' }[type];
+    setToast(`Opening ${label}…`);
     handleAction(type);
   };
 
@@ -1093,6 +1095,9 @@ function App() {
           </div>
           <button className="launch-btn" onClick={() => handleAction(selected)}>
             {LAUNCH_LABELS[selected]}
+          </button>
+          <button className="install-help-trigger" type="button" onClick={() => setModal(selected === 'r' ? 'rstudio' : 'vscode')}>
+            Need help installing?
           </button>
           {selected === 'r' && (
             <div style={{ textAlign: 'center', marginTop: 8 }}>

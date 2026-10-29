@@ -105,6 +105,7 @@ test('CSP protects normal, error, and asset responses; embedded logo header is h
   expect(nginx.match(/add_header Content-Security-Policy "frame-ancestors 'self' https:\/\/webstudio\.omnibioai\.org" always;/g)).toHaveLength(2);
   expect(nginx).toContain('try_files $uri =404;');
   expect(fs.readFileSync(path.resolve(process.cwd(), 'src/App.css'), 'utf8')).toContain('html[data-embedded="true"] .header { display: none; }');
+  expect(fs.readFileSync(path.resolve(process.cwd(), 'src/App.css'), 'utf8')).toContain('html[data-embedded="true"] .brand-lockup { display: none; }');
 });
 
 test('vendored tokens are 1.1.0 without tooling or a nested lockfile', () => {

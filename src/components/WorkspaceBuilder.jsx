@@ -85,8 +85,8 @@ function EnvironmentCard({ option, selected, onSelect, environmentIds }) {
 function ServiceCard({ option, status, onOpen }) {
   const running = status === 'running';
   return <article className="service-card" style={{ '--ide-accent': option.accent }}>
-    <span className="ide-choice-icon" aria-hidden="true">{option.icon}</span>
-    <div><strong>{option.label}</strong><StatusBadge status={status} /></div>
+    <div className="service-card-heading"><span className="ide-choice-icon" aria-hidden="true">{option.icon}</span><strong>{option.label}</strong><StatusBadge status={status} /></div>
+    <p className="service-description">{option.description}</p>
     {running
       ? <button type="button" className="button button--open" onClick={() => onOpen(option.id)}>Open ↗</button>
       : <span className="service-unavailable">Not available to open</span>}
@@ -404,6 +404,11 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
   const selectedEnvironmentLabel = ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.label;
   const launchSucceeded = Boolean(launchResult?.manifest);
   const validationState = validating ? 'Validating' : validationError ? 'Validation failed' : isValidated ? 'Validated' : 'Not validated';
+  const currentStep = isValidated ? 6 : 4;
+  const workflowSteps = [
+    ['profile-heading', 'Profile'], ['environment-heading', 'Environment'], ['objects-heading', 'Objects'],
+    ['compute-heading', 'Compute'], ['review-heading', 'Review'], ['launch-heading', 'Launch'],
+  ];
 
   return (
     <main id="main-content" className="workspace-shell">
@@ -420,6 +425,18 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
       </section>
 
       <div className="new-workspace-heading"><span className="eyebrow">Configure and launch</span><h2>New workspace</h2><p>Profile, environment, architecture, CPU, memory, and GPU affect validation and the shared container selected or updated by the Launcher.</p></div>
+
+      <nav className="workflow-bar" aria-label="Workspace workflow">
+        <ol>{workflowSteps.map(([target, label], index) => {
+          const number = index + 1;
+          const state = number === currentStep ? 'current' : number < currentStep ? 'completed' : 'upcoming';
+          return <li key={target} className={`workflow-step workflow-step--${state}`}>
+            <a href={`#${target}`} aria-current={state === 'current' ? 'step' : undefined}>
+              <span className="workflow-step-number">{number}</span><span>{label}</span>
+            </a>
+          </li>;
+        })}</ol>
+      </nav>
 
       <div className="workspace-layout">
         <div className="workspace-config">
@@ -459,13 +476,14 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
         </div>
 
         <div className="workspace-review-column">
-          <WorkspacePreview profile={selectedProfile} environment={environment} resources={resources} objects={objects} validation={isValidated ? validation : null} validationState={validationState} manifest={launchResult?.manifest} manifestError={manifestError} />
-          <div className="launch-panel">
+          <div id="review-heading"><WorkspacePreview profile={selectedProfile} environment={environment} resources={resources} objects={objects} validation={isValidated ? validation : null} validationState={validationState} manifest={launchResult?.manifest} manifestError={manifestError} /></div>
+          <div className="launch-panel" id="launch-heading">
             {validationError && <div className="inline-message inline-message--error" role="alert">{validationError}</div>}
             {launchError && <div className="inline-message inline-message--error" role="alert">{launchError}</div>}
             {launchSucceeded && <div className="inline-message inline-message--success" role="status">Workspace {launchResult.workspace_id} is running.</div>}
             <button type="button" className="button button--secondary button--wide" disabled={validating || launching || !profileId} onClick={validate}>{validating ? 'Validating…' : 'Validate configuration'}</button>
-            <button type="button" className="button button--primary button--wide" disabled={!isValidated || launching || validating || !profileId} onClick={launch}>{launching ? 'Launching workspace…' : 'Launch Workspace'}</button>
+            <button type="button" className="button button--primary button--wide" disabled={!isValidated || launching || validating || !profileId} aria-disabled={!isValidated || launching || validating || !profileId} onClick={launch}>{launching ? 'Launching workspace…' : 'Launch Workspace'}</button>
+            {!isValidated && <p className="launch-helper">Validate the configuration to enable launch.</p>}
             {launchSucceeded && <button type="button" className="button button--open button--wide" onClick={() => onOpenIde(environment)}>Open {ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.label} ↗</button>}
             <p>Launch validates the request, applies CPU and memory limits to the selected shared <strong>{selectedEnvironmentLabel || 'environment'}</strong> container, verifies architecture and GPU compatibility, then starts that service. It requires workspace launch permission.</p>
           </div>

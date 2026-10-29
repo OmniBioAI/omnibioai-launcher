@@ -30,8 +30,8 @@ function InstallModal({ type, onDismiss }) {
 
   return (
     <div className="modal-overlay" onClick={onDismiss}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">{config.title}</h2>
+      <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="install-modal-title" onClick={(e) => e.stopPropagation()}>
+        <h2 className="modal-title" id="install-modal-title">{config.title}</h2>
         <p className="modal-body">{config.body}</p>
         <div className="modal-actions">
           <a
