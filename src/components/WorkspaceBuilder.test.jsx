@@ -200,7 +200,7 @@ describe('WorkspaceBuilder', () => {
 
   test('validates through the v1 API and renders the resolved environment', async () => {
     const validate = jest.fn(() => jsonResponse(validationPayload()));
-    installFetch({ validate });
+    installFetch({ validate, running: [] });
     await renderLoaded();
     await userEvent.click(screen.getByRole('button', { name: 'Validate configuration' }));
     expect(await screen.findByText('Validated')).toBeInTheDocument();
@@ -415,17 +415,67 @@ describe('WorkspaceBuilder deployment compatibility', () => {
     expect(validate).toHaveClass('button--secondary');
     expect(launch).not.toHaveClass('button--primary');
     expect(within(panel).getAllByRole('button').filter((button) => button.classList.contains('button--primary'))).toEqual([open]);
-    expect(launch).toBeDisabled();
-    expect(launch).toHaveAttribute('disabled');
-    expect(launch).toHaveAttribute('aria-disabled', 'true');
-    await userEvent.click(launch);
+    // Open is the only active action: Validate could only return 409 here.
+    for (const button of [validate, launch]) {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute('disabled');
+      expect(button).toHaveAttribute('aria-disabled', 'true');
+      expect(button).toHaveAccessibleDescription(/JupyterLab is already running/);
+      await userEvent.click(button);
+    }
+    expect(within(panel).getAllByRole('button').filter((button) => !button.disabled)).toEqual([open]);
+    expect(global.fetch).not.toHaveBeenCalledWith('/api/launcher/v1/workspaces/validate', expect.anything());
     expect(global.fetch).not.toHaveBeenCalledWith('/api/launcher/v1/workspaces', expect.anything());
-    await userEvent.click(validate);
-    expect(await screen.findByText('Validated')).toBeInTheDocument();
-    expect(launch).toBeDisabled();
-    expect(launch).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText('Not validated')).toBeInTheDocument();
     await userEvent.click(open);
     expect(onOpenIde).toHaveBeenCalledWith('jupyterlab');
+  });
+
+  test('a running-conflict 409 from validate shows only the notice and switches the panel to Open', async () => {
+    const running = [];
+    const conflict = "JupyterLab is already running, so its resource settings can't be changed. Open it, or stop it and launch again.";
+    installFetch({ running, validate: () => { running.push('jupyter'); return jsonResponse({ error: conflict }, 409); } });
+    await renderLoaded();
+    const panel = document.getElementById('launch-heading');
+    const validate = within(panel).getByRole('button', { name: 'Validate configuration' });
+    await act(async () => { await Promise.resolve(); });
+    expect(validate).toBeEnabled();
+    const statusCalls = () => global.fetch.mock.calls.filter(([url]) => url.endsWith('/status/jupyter')).length;
+    const before = statusCalls();
+    await userEvent.click(validate);
+    expect(await within(panel).findByText(/JupyterLab is already running/)).toHaveAttribute('role', 'status');
+    expect(within(panel).queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText(conflict)).not.toBeInTheDocument();
+    expect(screen.queryByText('Validation failed')).not.toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Open JupyterLab ↗' })).toHaveClass('button--primary');
+    expect(validate).toBeDisabled();
+    expect(within(panel).getByRole('button', { name: 'Launch Workspace' })).toBeDisabled();
+    expect(statusCalls()).toBeGreaterThan(before);
+    expect(await within(screen.getByRole('region', { name: 'Select Environment' })).findByRole('button', { name: 'Open JupyterLab ↗' })).toBeInTheDocument();
+  });
+
+  test('a running-conflict 409 from launch shows only the notice, not a launch error', async () => {
+    const running = [];
+    installFetch({ running, launch: () => { running.push('jupyter'); return jsonResponse({ error: "JupyterLab is already running, so its resource settings can't be changed. Open it, or stop it and launch again." }, 409); } });
+    await renderLoaded();
+    const panel = document.getElementById('launch-heading');
+    await userEvent.click(within(panel).getByRole('button', { name: 'Validate configuration' }));
+    expect(await screen.findByText('Validated')).toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole('button', { name: 'Launch Workspace' }));
+    expect(await within(panel).findByText(/JupyterLab is already running/)).toHaveAttribute('role', 'status');
+    expect(within(panel).queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Workspace .* is running\./)).not.toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Open JupyterLab ↗' })).toHaveClass('button--primary');
+    expect(within(panel).getByRole('button', { name: 'Launch Workspace' })).toBeDisabled();
+  });
+
+  test('other 409s are still shown as errors', async () => {
+    installFetch({ running: [], validate: () => jsonResponse({ error: 'workspace id already exists' }, 409) });
+    await renderLoaded();
+    await act(async () => { await Promise.resolve(); });
+    await userEvent.click(screen.getByRole('button', { name: 'Validate configuration' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('workspace id already exists');
+    expect(screen.queryByText(/is already running/)).not.toBeInTheDocument();
   });
 
   test('a stopped selected service keeps Launch as the primary action', async () => {
@@ -440,7 +490,7 @@ describe('WorkspaceBuilder deployment compatibility', () => {
 
   test('fractional GiB memory is sent as whole bytes and the label reflects customization', async () => {
     let body;
-    installFetch({ validate: (url, init) => { body = JSON.parse(init.body); return jsonResponse(validationPayload()); } });
+    installFetch({ validate: (url, init) => { body = JSON.parse(init.body); return jsonResponse(validationPayload()); }, running: [] });
     await renderLoaded();
     expect(screen.getByText('Profile defaults applied')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Memory value in GiB'), { target: { value: '4.1' } });

@@ -174,22 +174,24 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
         await expect(launch).toBeDisabled();
         await expect(launch).toHaveAttribute('aria-disabled', 'true');
         await expect(launch).toHaveCSS('cursor', 'not-allowed');
-        // Disabled Launch must not look like the enabled Validate beside it
-        // (both are secondary buttons while the selected IDE runs). Wait out
-        // the .button opacity transition before reading computed styles.
+        // While the selected IDE runs, Open is the only active action:
+        // Validate (which could only 409) and Launch are both disabled, point
+        // at the notice, and look disabled. Wait out the .button opacity
+        // transition before reading computed styles.
         const validateButton = launchPanel.getByRole('button', { name: 'Validate configuration' });
-        await expect(validateButton).toBeEnabled();
-        await expect(launch).toHaveCSS('opacity', '1');
-        await expect(validateButton).toHaveCSS('opacity', '1');
         const look = (button) => button.evaluate((element) => {
           const style = getComputedStyle(element);
           return { background: style.backgroundColor, borderStyle: style.borderTopStyle, color: style.color };
         });
-        const [disabledLook, enabledLook] = [await look(launch), await look(validateButton)];
-        expect(disabledLook.borderStyle).toBe('dashed');
-        expect(enabledLook.borderStyle).toBe('solid');
-        expect(disabledLook.background).not.toBe(enabledLook.background);
-        expect(disabledLook.color).not.toBe(enabledLook.color);
+        for (const button of [validateButton, launch]) {
+          await expect(button).toBeDisabled();
+          await expect(button).toHaveAttribute('aria-describedby', 'running-notice');
+          await expect(button).toHaveCSS('opacity', '1');
+          expect((await look(button)).borderStyle).toBe('dashed');
+        }
+        expect(await launchPanel.locator('button:not([disabled])').count()).toBe(1);
+        await validateButton.click({ force: true });
+        await expect(page.getByText('Not validated')).toBeVisible();
         await launch.click({ force: true });
         await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
         expect(launchRequests).toBe(0);
@@ -230,6 +232,17 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
         await expect(rstudio).toHaveAttribute('aria-checked', 'true');
         await expect(page.getByText('Validate the configuration to enable launch.')).toBeVisible();
         await expect(launch).toHaveClass(/button--primary/);
+        // RStudio is stopped: Validate is enabled again and the disabled
+        // Launch must not look like it.
+        await expect(validateButton).toBeEnabled();
+        await expect(validateButton).not.toHaveAttribute('aria-describedby', 'running-notice');
+        await expect(launch).toHaveCSS('opacity', '1');
+        await expect(validateButton).toHaveCSS('opacity', '1');
+        const [disabledLook, enabledLook] = [await look(launch), await look(validateButton)];
+        expect(disabledLook.borderStyle).toBe('dashed');
+        expect(enabledLook.borderStyle).toBe('solid');
+        expect(disabledLook.background).not.toBe(enabledLook.background);
+        expect(disabledLook.color).not.toBe(enabledLook.color);
         await expect(launchPanel.getByRole('button', { name: /^Open / })).toHaveCount(0);
 
         const jupyterCard = environments.locator('.ide-option').first();

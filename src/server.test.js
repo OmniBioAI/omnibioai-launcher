@@ -369,7 +369,15 @@ describe('launcher API pre-flight and lifecycle fixes', () => {
     dockerReplySequence([container(true), image]);
     const response = await requestApp('POST', '/api/launcher/v1/workspaces/validate', GOOD, body());
     expect(response.status).toBe(409);
-    expect(response.body.error).toMatch(/JupyterLab is already running/);
+    expect(response.body.error).toBe("JupyterLab is already running, so its resource settings can't be changed. Open it, or stop it and launch again.");
+    expect(response.body.error).not.toMatch(/Running services/);
+  });
+
+  test('the running conflict for Terminal keeps the shared-container note', async () => {
+    dockerReplySequence([container(true), image]);
+    const response = await requestApp('POST', '/api/launcher/v1/workspaces/validate', GOOD, body({ ide: { type: 'terminal' } }));
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe("Terminal is already running (VS Code and Terminal share one container), so its resource settings can't be changed. Open it, or stop it and launch again.");
   });
 
   test('validate passes when the container is stopped and compatible', async () => {

@@ -18,6 +18,13 @@ function parseError(payload, fallback) {
   return payload && typeof payload.error === 'string' ? payload.error : fallback;
 }
 
+// The server's 409 when the selected shared container is already running
+// (rejectRunning in server.js). Launch can also 409 on a duplicate workspace
+// id, which is a real error, so match the message as well as the status.
+function isRunningConflict(response, payload) {
+  return response.status === 409 && typeof payload?.error === 'string' && /is already running/.test(payload.error);
+}
+
 async function responseJson(response) {
   return response.json().catch(() => ({}));
 }
@@ -376,6 +383,15 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
     objects: objects.map((object) => object.uri),
   }), [environment, objects, profileId, resources, selectedProfile]);
 
+  // The status poll can lag a container that just started. When the server
+  // reports it running, trust that now (the notice and Open take over instead
+  // of a red error) and re-poll to confirm.
+  const markSelectedRunning = useCallback(() => {
+    const container = ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.container;
+    if (container) setStatuses((current) => ({ ...current, [container]: 'running' }));
+    refreshStatuses();
+  }, [environment, refreshStatuses]);
+
   const currentFingerprint = JSON.stringify(requestBody());
   latestRequestFingerprint.current = currentFingerprint;
   const isValidated = Boolean(validation && validationFingerprint === currentFingerprint);
@@ -391,6 +407,12 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
         method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body),
       });
       const payload = await responseJson(response);
+      if (isRunningConflict(response, payload)) {
+        setValidation(null);
+        setValidationFingerprint('');
+        markSelectedRunning();
+        return null;
+      }
       if (!response.ok) throw new Error(parseError(payload, `Validation failed (${response.status}).`));
       if (latestRequestFingerprint.current !== fingerprint) {
         setValidation(null);
@@ -407,7 +429,7 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
       setValidationError(error.message);
       return null;
     } finally { setValidating(false); }
-  }, [baseUrl, profileId, requestBody]);
+  }, [baseUrl, markSelectedRunning, profileId, requestBody]);
 
   const launch = async () => {
     if (launchInFlight.current || !isValidated) return;
@@ -420,6 +442,12 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
         method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(requestBody()),
       });
       const payload = await responseJson(response);
+      if (isRunningConflict(response, payload)) {
+        setValidation(null);
+        setValidationFingerprint('');
+        markSelectedRunning();
+        return;
+      }
       if (!response.ok) throw new Error(parseError(payload, `Workspace launch failed (${response.status}).`));
       setLaunchResult(payload);
       setManifestError('');
@@ -533,10 +561,10 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
             {validationError && <div className="inline-message inline-message--error" role="alert">{validationError}</div>}
             {launchError && <div className="inline-message inline-message--error" role="alert">{launchError}</div>}
             {launchSucceeded && <div className="inline-message inline-message--success" role="status">Workspace {launchResult.workspace_id} is running.</div>}
-            {selectedServiceRunning && <div className="inline-message inline-message--info" role="status">{selectedEnvironmentLabel} is already running{environment === 'vscode' || environment === 'terminal' ? ' (VS Code and Terminal share one container)' : ''}. Open it, or stop it to launch with new resource settings.</div>}
+            {selectedServiceRunning && <div id="running-notice" className="inline-message inline-message--info" role="status">{selectedEnvironmentLabel} is already running{environment === 'vscode' || environment === 'terminal' ? ' (VS Code and Terminal share one container)' : ''}. Open it, or stop it to launch with new resource settings.</div>}
             {selectedServiceRunning && <button type="button" className="button button--primary button--wide" onClick={() => onOpenIde(environment)}>Open {selectedEnvironmentLabel} ↗</button>}
-            <button type="button" className="button button--secondary button--wide" disabled={validating || launching || !profileId} onClick={validate}>{validating ? 'Validating…' : 'Validate configuration'}</button>
-            <button type="button" className={`button ${selectedServiceRunning ? 'button--secondary' : 'button--primary'} button--wide`} disabled={!isValidated || launching || validating || !profileId || selectedServiceRunning} aria-disabled={!isValidated || launching || validating || !profileId || selectedServiceRunning} onClick={launch}>{launching ? 'Launching workspace…' : 'Launch Workspace'}</button>
+            <button type="button" className="button button--secondary button--wide" disabled={validating || launching || !profileId || selectedServiceRunning} aria-disabled={validating || launching || !profileId || selectedServiceRunning} aria-describedby={selectedServiceRunning ? 'running-notice' : undefined} onClick={validate}>{validating ? 'Validating…' : 'Validate configuration'}</button>
+            <button type="button" className={`button ${selectedServiceRunning ? 'button--secondary' : 'button--primary'} button--wide`} disabled={!isValidated || launching || validating || !profileId || selectedServiceRunning} aria-disabled={!isValidated || launching || validating || !profileId || selectedServiceRunning} aria-describedby={selectedServiceRunning ? 'running-notice' : undefined} onClick={launch}>{launching ? 'Launching workspace…' : 'Launch Workspace'}</button>
             {!isValidated && !selectedServiceRunning && <p className="launch-helper">Validate the configuration to enable launch.</p>}
             {launchSucceeded && <button type="button" className="button button--open button--wide" onClick={() => onOpenIde(environment)}>Open {ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.label} ↗</button>}
             <p>Launch validates the request, applies CPU and memory limits to the selected shared <strong>{selectedEnvironmentLabel || 'environment'}</strong> container, verifies architecture and GPU compatibility, then starts that service. It requires workspace launch permission.</p>
