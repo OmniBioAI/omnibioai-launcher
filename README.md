@@ -201,7 +201,6 @@ The fixed-container model is inherently shared infrastructure. `platform.manage_
 
 ## Known technical debt
 
-- The unused `IdeCard` component still hardcodes `localhost` port URLs; the app opens IDEs through `src/ideUrls.js`.
 - Some legacy React async tests emit `act(...)` warnings despite passing.
 - Create React App and its dependency tree report upstream audit findings; upgrading the frontend toolchain is separate from this bounded enhancement.
 - Manifests persist to a local JSON file for a single Launcher instance; shared storage across replicas and per-user runtime isolation require a verified owning service/deployment contract.

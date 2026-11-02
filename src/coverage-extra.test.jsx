@@ -1,8 +1,7 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
-import { IdeCard } from './components/IdeCard';
 
 describe('additional coverage for asynchronous and fallback paths', () => {
   beforeEach(() => window.history.replaceState({}, '', '/?view=objects'));
@@ -10,46 +9,6 @@ describe('additional coverage for asynchronous and fallback paths', () => {
     jest.useRealTimers();
     jest.restoreAllMocks();
     window.history.replaceState({}, '', '/');
-  });
-
-  test('launches after the polling timeout when the IDE stays stopped', async () => {
-    jest.spyOn(window, 'open').mockImplementation(() => null);
-    jest.spyOn(global, 'setInterval').mockImplementation((callback) => {
-      for (let i = 0; i < 30; i += 1) callback();
-      return 1;
-    });
-    jest.spyOn(global, 'clearInterval').mockImplementation(() => {});
-    global.fetch = jest.fn((url) => {
-      if (url.includes('/status/')) return Promise.resolve({ ok: true, json: async () => ({ status: 'stopped' }) });
-      return Promise.resolve({ ok: true, json: async () => ({}) });
-    });
-
-    render(<IdeCard tool="jupyter" />);
-    await act(async () => { await Promise.resolve(); });
-    fireEvent.click(screen.getByRole('button', { name: 'Launch' }));
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-
-    expect(window.open).toHaveBeenCalledWith('http://localhost:8888', '_blank');
-  });
-
-  test('clears a failed polling interval after the timeout', async () => {
-    jest.spyOn(global, 'setInterval').mockImplementation((callback) => {
-      for (let i = 0; i < 30; i += 1) callback();
-      return 1;
-    });
-    jest.spyOn(global, 'clearInterval').mockImplementation(() => {});
-    global.fetch = jest.fn((url) => {
-      if (url.includes('/status/')) return Promise.resolve({ ok: true, json: async () => ({ status: 'stopped' }) });
-      return Promise.resolve({ ok: true, json: async () => ({}) });
-    });
-
-    render(<IdeCard tool="rstudio" />);
-    await act(async () => { await Promise.resolve(); });
-    fireEvent.click(screen.getByRole('button', { name: 'Launch' }));
-    global.fetch.mockRejectedValue(new Error('polling unavailable'));
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-
-    expect(screen.getByRole('button', { name: 'Starting…' })).toBeInTheDocument();
   });
 
   test('covers flat grouping, load-more hover handlers, and empty results', async () => {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, waitFor } from '@testing-library/react';
 import { ACCESS_TOKEN_KEY, accessToken, authHeaders } from './session';
-import IdeCard from './components/IdeCard';
+import WorkspaceBuilder from './components/WorkspaceBuilder';
 
 // The Launcher once compiled its Jupyter token and an API bearer into the public
 // bundle (REACT_APP_*). It now sends only the signed-in user's own token, and
@@ -33,13 +33,13 @@ describe('browser session auth', () => {
     expect(authHeaders()).toEqual({});
   });
 
-  test('IdeCard requests carry the user token, never a build-time credential', async () => {
+  test('Launcher API requests carry the user token, never a build-time credential', async () => {
     process.env.REACT_APP_JUPYTER_TOKEN = SENTINEL;
     process.env.REACT_APP_OMNIBIOAI_TOKEN = SENTINEL;
     window.localStorage.setItem(ACCESS_TOKEN_KEY, 'user-iam-token');
     global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'stopped' }) });
     try {
-      render(<IdeCard tool="jupyter" />);
+      render(<WorkspaceBuilder baseUrl="" onOpenIde={() => {}} onBrowseObjects={() => {}} />);
       await waitFor(() => expect(global.fetch).toHaveBeenCalled());
       const [, init] = global.fetch.mock.calls[0];
       expect(init.headers).toEqual({ Authorization: 'Bearer user-iam-token' });
@@ -50,9 +50,9 @@ describe('browser session auth', () => {
     }
   });
 
-  test('IdeCard sends no Authorization header when signed out', async () => {
+  test('Launcher API requests send no Authorization header when signed out', async () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'stopped' }) });
-    render(<IdeCard tool="jupyter" />);
+    render(<WorkspaceBuilder baseUrl="" onOpenIde={() => {}} onBrowseObjects={() => {}} />);
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
     expect(global.fetch.mock.calls[0][1].headers).toEqual({});
   });
