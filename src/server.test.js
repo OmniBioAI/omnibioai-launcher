@@ -1,4 +1,7 @@
 const EventEmitter = require('events');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { TextEncoder, TextDecoder } = require('util');
 global.TextEncoder = TextEncoder;
 global.TextDecoder = TextDecoder;
@@ -21,7 +24,11 @@ jest.mock('http', () => {
   const actual = jest.requireActual('http');
   return { ...actual, request: (options, callback) => mockDockerRequest(options, callback) };
 });
+// Manifests persist under LAUNCHER_STATE_DIR; give this suite its own directory.
+const STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'launcher-state-'));
+process.env.LAUNCHER_STATE_DIR = STATE_DIR;
 const serverModule = require('../server');
+afterAll(() => fs.rmSync(STATE_DIR, { recursive: true, force: true }));
 
 function requestApp(method, url, headers = {}, body) {
   return new Promise((resolve) => {
@@ -60,9 +67,11 @@ function dockerReply(statusCode, body, error) {
 }
 
 function dockerReplySequence(replies) {
+  const payloads = [];
   mockDockerRequest = jest.fn((options, callback) => {
     const request = new EventEmitter();
-    request.end = () => {
+    request.end = (payload) => {
+      payloads.push(payload === undefined ? undefined : JSON.parse(payload));
       const reply = replies.shift();
       if (reply.error) return process.nextTick(() => request.emit('error', reply.error));
       const response = new EventEmitter();
@@ -75,10 +84,20 @@ function dockerReplySequence(replies) {
     };
     return request;
   });
+  mockDockerRequest.payloads = payloads;
 }
 
 
 const GOOD = { Authorization: 'Bearer valid-user-token' };
+
+function storedManifest(identity, workspaceId) {
+  return {
+    schema_version: '1.0', workspace_id: workspaceId, profile: 'generic-python', ide: 'jupyterlab',
+    image: { reference: 'registry.example.test/jupyter:1', digest: `sha256:${'c'.repeat(64)}` },
+    resources: { cpu: 2, memory_bytes: 4 * 1024 ** 3, gpu: 0, architecture: 'amd64' }, objects: [],
+    identity, created_at: '2026-11-01T00:00:00.000Z', launcher_version: '0.1.0', environment: {}, provenance: {},
+  };
+}
 
 // Stubs omnibioai-auth's POST /auth/validate.
 function iamReply(body, { ok = true, error } = {}) {
@@ -258,26 +277,34 @@ describe('launcher Express API', () => {
         ['POST', '/containers/omnibioai-jupyter/update'],
         ['POST', '/containers/omnibioai-jupyter/start'],
       ]);
+      expect(mockDockerRequest.payloads[2]).toEqual({ NanoCpus: 2_000_000_000, Memory: 4 * 1024 ** 3, MemorySwap: 4 * 1024 ** 3 });
       serverModule.manifests.clear();
     });
 
     test('resource translation emits only bounded Docker CPU and memory controls', () => {
       const update = serverModule.dockerResourceUpdate({ cpu: 1.5, memory_bytes: 536870912, privileged: true, mounts: ['/host'] });
-      expect(update).toEqual({ NanoCpus: 1500000000, Memory: 536870912 });
-      expect(Object.keys(update)).toEqual(['NanoCpus', 'Memory']);
+      expect(update).toEqual({ NanoCpus: 1500000000, Memory: 536870912, MemorySwap: 536870912 });
+      expect(Object.keys(update)).toEqual(['NanoCpus', 'Memory', 'MemorySwap']);
+    });
+
+    test('memory updates always pin MemorySwap to Memory, so a larger relaunch is not rejected by a stale swap limit', () => {
+      for (const memory_bytes of [4 * 1024 ** 3, 16 * 1024 ** 3, 2.5 * 1024 ** 3]) {
+        const update = serverModule.dockerResourceUpdate({ cpu: 1, memory_bytes });
+        expect(update.MemorySwap).toBe(update.Memory);
+        expect(Number.isInteger(update.MemorySwap)).toBe(true);
+      }
     });
 
     test('workspace manifests are isolated by both user and organization', async () => {
       const owner = { user_id: 'owner', organization_id: 'org-a' };
-      const key = serverModule.manifestKey(owner, 'private-workspace');
-      serverModule.manifests.set(key, { identity: owner });
+      serverModule.manifests.set(owner, 'private-workspace', storedManifest(owner, 'private-workspace'));
       iamReply({ valid: true, user_id: 'owner', organization_id: 'org-b', permissions: [] });
       expect(await requestApp('GET', '/api/launcher/v1/workspaces/private-workspace/manifest', GOOD)).toMatchObject({ status: 404 });
       iamReply({ valid: true, user_id: 'other', organization_id: 'org-a', permissions: [] });
       expect(await requestApp('GET', '/api/launcher/v1/workspaces/private-workspace/manifest', GOOD)).toMatchObject({ status: 404 });
       iamReply({ valid: true, user_id: 'owner', organization_id: 'org-a', permissions: [] });
       expect(await requestApp('GET', '/api/launcher/v1/workspaces/private-workspace/manifest', GOOD)).toMatchObject({ status: 200 });
-      serverModule.manifests.delete(key);
+      serverModule.manifests.delete(owner, 'private-workspace');
     });
 
     test('a numeric user_id/org_id (the real shape omnibioai-auth/validate returns -- plain SQL integer primary keys, never stored as strings) is accepted, not rejected as lacking org context', async () => {
@@ -322,5 +349,159 @@ describe('launcher Express API', () => {
         status: 403, body: { error: 'insufficient permissions' },
       });
     });
+  });
+});
+
+describe('launcher API pre-flight and lifecycle fixes', () => {
+  const ARCH = process.arch === 'arm64' ? 'arm64' : 'amd64';
+  const digest = `sha256:${'b'.repeat(64)}`;
+  const body = (overrides = {}) => ({
+    workspace: { profile: 'generic-python' }, ide: { type: 'jupyterlab' },
+    resources: { cpu: 2, memory_bytes: 4 * 1024 ** 3, gpu: 0, architecture: ARCH }, ...overrides,
+  });
+  const container = (running) => ({ statusCode: 200, body: { Image: digest, Config: { Image: 'registry.example.test/jupyter:1' }, State: { Running: running }, HostConfig: {} } });
+  const image = { statusCode: 200, body: { Architecture: ARCH, RepoDigests: [`registry.example.test/jupyter@${digest}`] } };
+
+  beforeEach(() => { iamReply({ valid: true, user_id: 6, org_id: 1, permissions: ['workspace.launch'] }); });
+
+  test('validate rejects a configuration whose shared container is already running', async () => {
+    dockerReplySequence([container(true), image]);
+    const response = await requestApp('POST', '/api/launcher/v1/workspaces/validate', GOOD, body());
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatch(/JupyterLab is already running/);
+  });
+
+  test('validate passes when the container is stopped and compatible', async () => {
+    dockerReplySequence([container(false), image]);
+    const response = await requestApp('POST', '/api/launcher/v1/workspaces/validate', GOOD, body());
+    expect(response).toMatchObject({ status: 200, body: { environment: { ide: 'jupyterlab' } } });
+  });
+
+  test('validate rejects attached objects up front, the same as launch, without touching Docker', async () => {
+    dockerReply(200, {});
+    const response = await requestApp('POST', '/api/launcher/v1/workspaces/validate', GOOD, body({ objects: ['omnibioai://dataset/abc'] }));
+    expect(response.status).toBe(501);
+    expect(response.body.error).toMatch(/remove the attached objects/);
+    expect(mockDockerRequest).not.toHaveBeenCalled();
+  });
+
+  test('validate reports an unreachable container runtime as 503, not a generic 500', async () => {
+    dockerReply(500, {}, new Error('ENOENT'));
+    const response = await requestApp('POST', '/api/launcher/v1/workspaces/validate', GOOD, body());
+    expect(response.status).toBe(503);
+  });
+
+  test('RNA-seq validates against the default Jupyter environment', async () => {
+    dockerReplySequence([container(false), image]);
+    const response = await requestApp('POST', '/api/launcher/v1/workspaces/validate', GOOD, body({ workspace: { profile: 'rna-seq' } }));
+    expect(response.status).toBe(200);
+  });
+
+  test('start/stop surface Docker errors instead of reporting ok', async () => {
+    dockerReply(404, { message: 'No such container: omnibioai-rstudio' });
+    expect(await requestApp('POST', '/api/launcher/start/rstudio', GOOD)).toMatchObject({ status: 404 });
+    dockerReply(500, { message: 'driver failed' });
+    expect(await requestApp('POST', '/api/launcher/stop/rstudio', GOOD)).toMatchObject({ status: 502, body: { error: expect.stringMatching(/driver failed/) } });
+    dockerReply(304, '');
+    expect(await requestApp('POST', '/api/launcher/start/jupyter', GOOD)).toMatchObject({ status: 200, body: { ok: true, unchanged: true } });
+  });
+
+  test('profiles list compatible IDEs and cap GPUs at what environments provide', async () => {
+    const response = await requestApp('GET', '/api/launcher/v1/profiles', GOOD);
+    expect(response.status).toBe(200);
+    const byId = Object.fromEntries(response.body.profiles.map((profile) => [profile.id, profile]));
+    expect(byId['rna-seq'].compatible_ides).toContain('jupyterlab');
+    expect(byId['generic-r'].compatible_ides).not.toContain('jupyterlab');
+    expect(byId.proteomics.compatible_ides).toEqual([]);
+    expect(response.body.resource_limits.gpu).toBe(0);
+  });
+});
+
+describe('Debug from Run capability', () => {
+  const RUN = { run_reference: 'omnibioai://run/run-42' };
+  beforeEach(() => { iamReply({ valid: true, user_id: 6, org_id: 1, permissions: ['workspace.launch'] }); });
+  afterEach(() => { serverModule.runIntegration.resolver = undefined; serverModule.runIntegration.authorize = undefined; });
+
+  test('profiles report debug_from_run = false and from-run stays 501 when nothing is configured', async () => {
+    expect((await requestApp('GET', '/api/launcher/v1/profiles', GOOD)).body.features).toEqual({ debug_from_run: false });
+    expect(await requestApp('POST', '/api/launcher/v1/workspaces/from-run', GOOD, RUN)).toMatchObject({ status: 501 });
+  });
+
+  test('the flag needs BOTH a real resolver and an authorizer', async () => {
+    const { RunMetadataResolver } = require('../lib/run-resolver');
+    serverModule.runIntegration.authorize = async () => true;
+    expect(serverModule.debugFromRunEnabled()).toBe(false);
+    serverModule.runIntegration.resolver = new RunMetadataResolver();
+    expect(serverModule.debugFromRunEnabled()).toBe(false);
+    serverModule.runIntegration.authorize = undefined;
+    serverModule.runIntegration.resolver = { resolve: async () => ({}) };
+    expect(serverModule.debugFromRunEnabled()).toBe(false);
+    expect(await requestApp('POST', '/api/launcher/v1/workspaces/from-run', GOOD, RUN)).toMatchObject({ status: 501 });
+    serverModule.runIntegration.authorize = async () => true;
+    expect((await requestApp('GET', '/api/launcher/v1/profiles', GOOD)).body.features).toEqual({ debug_from_run: true });
+  });
+
+  test('a configured authorizer that denies still fails closed with 403', async () => {
+    const resolve = jest.fn();
+    serverModule.runIntegration.resolver = { resolve };
+    serverModule.runIntegration.authorize = async () => false;
+    expect(await requestApp('POST', '/api/launcher/v1/workspaces/from-run', GOOD, RUN)).toMatchObject({ status: 403 });
+    expect(resolve).not.toHaveBeenCalled();
+  });
+});
+
+describe('durable workspace manifests', () => {
+  const ARCH = process.arch === 'arm64' ? 'arm64' : 'amd64';
+  const digest = `sha256:${'d'.repeat(64)}`;
+  const OWNER = { valid: true, user_id: 6, org_id: 1, permissions: ['workspace.launch'] };
+
+  afterEach(() => serverModule.manifests.clear());
+
+  function launchReplies() {
+    dockerReplySequence([
+      { statusCode: 200, body: { Image: digest, Config: { Image: 'registry.example.test/jupyter:1' }, State: { Running: false }, HostConfig: {} } },
+      { statusCode: 200, body: { Architecture: ARCH, RepoDigests: [`registry.example.test/jupyter@${digest}`] } },
+      { statusCode: 200, body: {} },
+      { statusCode: 204, body: {} },
+    ]);
+  }
+  const launchBody = (id) => ({
+    workspace: { profile: 'generic-python', id }, ide: { type: 'jupyterlab' },
+    resources: { cpu: 2, memory_bytes: 4 * 1024 ** 3, gpu: 0, architecture: ARCH },
+  });
+
+  test('a launched workspace manifest is still served after the service restarts', async () => {
+    iamReply(OWNER);
+    launchReplies();
+    expect(await requestApp('POST', '/api/launcher/v1/workspaces', GOOD, launchBody('durable-1'))).toMatchObject({ status: 201 });
+
+    const saved = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'manifests.json'), 'utf8'));
+    expect(saved.manifests).toEqual([expect.objectContaining({ organization_id: '1', user_id: '6', workspace_id: 'durable-1' })]);
+    expect(fs.readdirSync(STATE_DIR).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+
+    // Load a fresh copy of the service from the same state directory.
+    const previousApp = mockApp;
+    try {
+      jest.isolateModules(() => { require('../server'); });
+      const response = await requestApp('GET', '/api/launcher/v1/workspaces/durable-1/manifest', GOOD);
+      expect(response).toMatchObject({ status: 200, body: { workspace_id: 'durable-1', identity: { user_id: '6', organization_id: '1' } } });
+      iamReply({ ...OWNER, user_id: 7 });
+      expect(await requestApp('GET', '/api/launcher/v1/workspaces/durable-1/manifest', GOOD)).toMatchObject({ status: 404 });
+    } finally {
+      mockApp = previousApp;
+    }
+  });
+
+  test('a reused workspace id is still rejected after a restart', async () => {
+    serverModule.manifests.set({ user_id: '6', organization_id: '1' }, 'durable-2', storedManifest({ user_id: '6', organization_id: '1' }, 'durable-2'));
+    const previousApp = mockApp;
+    try {
+      jest.isolateModules(() => { require('../server'); });
+      iamReply(OWNER);
+      launchReplies();
+      expect(await requestApp('POST', '/api/launcher/v1/workspaces', GOOD, launchBody('durable-2'))).toMatchObject({ status: 409 });
+    } finally {
+      mockApp = previousApp;
+    }
   });
 });

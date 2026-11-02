@@ -24,7 +24,7 @@ describe('App', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/?view=objects');
     installFetch();
-    jest.spyOn(window.parent, 'postMessage').mockImplementation(() => {});
+    jest.spyOn(window, 'open').mockImplementation(() => null);
   });
   afterEach(() => jest.restoreAllMocks());
 
@@ -38,6 +38,19 @@ describe('App', () => {
     });
     render(<App />);
     expect(await screen.findByRole('radio', { name: /Generic Python/i })).toBeInTheDocument();
+  });
+
+  test('Open ↗ uses Studio\'s same-origin IDE route, never a LAN IP or raw port', async () => {
+    window.history.replaceState({}, '', '/_svc/sdk');
+    const profile = { id: 'generic-python', name: 'Generic Python', preferred_ide: 'jupyterlab', resources: { cpu: 2, memory_bytes: 4 * 1024 ** 3, gpu: 0 } };
+    global.fetch = jest.fn((url) => {
+      if (url.endsWith('/api/launcher/v1/profiles')) return Promise.resolve({ ok: true, json: async () => ({ profiles: [profile], resource_limits: { cpu: 8, memory_bytes: 8 * 1024 ** 3, gpu: 0 } }) });
+      if (url.includes('/api/launcher/status/')) return Promise.resolve({ ok: true, json: async () => ({ status: url.endsWith('/jupyter') ? 'running' : 'stopped' }) });
+      return Promise.reject(new Error(`unexpected URL: ${url}`));
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Open ↗' }));
+    expect(window.open).toHaveBeenCalledWith(`${window.location.origin}/jupyter/`, '_blank', 'noopener,noreferrer');
     expect(global.fetch).toHaveBeenCalledWith('/_svc/sdk/api/launcher/v1/profiles', expect.any(Object));
   });
 
@@ -116,9 +129,7 @@ describe('App', () => {
     render(<App />);
     expect(await screen.findByText('TCGA-BRCA RNAseq cohort 2024')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /R \/ RStudio Open RStudio/ }));
-    expect(window.parent.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'open-external', url: expect.stringContaining(':8787') }), '*'
-    );
+    expect(window.open).toHaveBeenCalledWith(`${window.location.origin}/rstudio/`, '_blank', 'noopener,noreferrer');
 
     cleanup();
     window.history.replaceState({}, '', '/?object_id=real-ok');
@@ -139,7 +150,7 @@ describe('App', () => {
     render(<App />);
     expect(await screen.findByText('TCGA-BRCA RNAseq cohort 2024')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /R \/ RStudio Open RStudio/ }));
-    expect(sendToHost).toHaveBeenCalledWith('open-external', expect.stringContaining(':8787'));
+    expect(sendToHost).toHaveBeenCalledWith('open-external', `${window.location.origin}/rstudio/`);
     await userEvent.click(screen.getByRole('button', { name: 'Download R starter script' }));
     expect(createObjectURL).toHaveBeenCalled();
     expect(click).toHaveBeenCalled();
@@ -202,11 +213,11 @@ describe('App', () => {
     cleanup();
     window.history.replaceState({}, '', '/?object_id=test');
     global.fetch.mockResolvedValue({ ok: true, json: async () => object });
-    const open = jest.spyOn(window.parent, 'postMessage').mockImplementation(() => {});
+    const open = jest.spyOn(window, 'open').mockImplementation(() => null);
     render(<App />);
     expect(await screen.findByText('TCGA-BRCA RNAseq cohort 2024')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /VS Code Open VS Code/ }));
-    expect(open).toHaveBeenCalledWith(expect.objectContaining({ url: expect.stringContaining(':8083') }), '*');
+    expect(open).toHaveBeenCalledWith(`${window.location.origin}/vscode/`, '_blank', 'noopener,noreferrer');
 
     cleanup();
     window.history.replaceState({}, '', '/?object_id=test');

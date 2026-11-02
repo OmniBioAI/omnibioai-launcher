@@ -113,13 +113,13 @@ GPU requests never assume CUDA or inject a device request. They resolve only whe
 
 Successful v1 launches return a schema `1.0` manifest containing workspace/profile/environment, resolved image and digest when available, architecture/resources, canonical object references, authoritative user and organization, timestamp, launcher version, candidate provenance, and allowlisted scalar environment metadata.
 
-`GET /api/launcher/v1/workspaces/:workspaceId/manifest` returns an in-memory manifest only to the same user in the same organization. Serialization/deserialization is strict and rejects secret-like fields. Tokens, passwords, credentials, API keys, arbitrary headers, and private keys are never manifest fields.
+`GET /api/launcher/v1/workspaces/:workspaceId/manifest` returns a manifest only to the same user in the same organization. Serialization/deserialization is strict and rejects secret-like fields. Tokens, passwords, credentials, API keys, arbitrary headers, and private keys are never manifest fields.
 
-Current limitation: manifest storage is process-local and is lost on restart. Durable export/recreate/audit storage is planned behind a verified service contract.
+Manifests are keyed by organization + user + workspace id. When `LAUNCHER_STATE_DIR` is set they are written to `$LAUNCHER_STATE_DIR/manifests.json` (mode `0600`, atomic temp-file + rename) and reloaded at startup, so they survive restarts. Every entry is validated on write and again on load and read; invalid entries are skipped, and an unreadable file is moved aside as `manifests.json.corrupt-<ms>` rather than overwritten. Without `LAUNCHER_STATE_DIR` manifests are process-local and lost on restart. Export/recreate/audit workflows are still planned behind a verified service contract.
 
 ### Run to Debug Workspace
 
-`POST /api/launcher/v1/workspaces/from-run` defines the authenticated contract with a single `run_reference`. The implemented boundary strictly parses a `run` URI and requires an authorization callback before metadata resolution. No authoritative run authorization or metadata contract exists in this repository, so the HTTP route currently returns `501` and never fabricates run metadata.
+`POST /api/launcher/v1/workspaces/from-run` defines the authenticated contract with a single `run_reference`. The implemented boundary strictly parses a `run` URI and requires an authorization callback before metadata resolution. No authoritative run authorization or metadata contract exists in this repository, so the HTTP route currently returns `501` and never fabricates run metadata. `GET /api/launcher/v1/profiles` reports `features.debug_from_run`, which is `true` only when both a run resolver and an authorizer are configured in `server.js`; the UI hides the Debug from Run panel otherwise.
 
 Planned flow:
 
@@ -133,7 +133,7 @@ run reference -> service authorization -> run metadata resolver
 - IAM validation and lifecycle permission checks fail closed.
 - Authoritative identity overrides are impossible because unknown request fields are rejected.
 - Both user and organization ownership are checked for manifests; cross-tenant misses return `404`.
-- Resource values have server-configured bounds and are converted only to fixed Docker `NanoCpus` and `Memory` fields.
+- Resource values have server-configured bounds and are converted only to fixed Docker `NanoCpus`, `Memory` and `MemorySwap` fields (`MemorySwap` = `Memory`: no swap).
 - Container names, mounts, paths, devices, privileged mode, and arbitrary Docker options are not client-controlled.
 - Object/run identifiers are context, not authorization.
 - Images use a strict reference grammar; client constraints cannot introduce a new candidate.
@@ -147,10 +147,13 @@ run reference -> service authorization -> run metadata resolver
 | Variable | Default | Purpose |
 |---|---|---|
 | `REACT_APP_OMNIBIOAI_BASE_URL` | `http://127.0.0.1:8000` | Backend/API gateway base URL |
-| `REACT_APP_JUPYTER_BASE` | `http://127.0.0.1:8890` | Hostname source for object launch |
+| `REACT_APP_IDE_BASE_URL` | page origin | Origin (optionally with a path prefix) serving Studio's `/jupyter/`, `/rstudio/` and `/vscode/` IDE routes |
+| `REACT_APP_JUPYTER_BASE` | — | Deprecated and unused; still accepted so existing Studio builds keep working |
 | `REACT_APP_USE_MOCK` | `false` | Local mock object data |
 
 Create React App embeds these in public JavaScript. Never put credentials in a `REACT_APP_*` variable.
+
+IDE links ("Open ↗", object launch) use Studio's same-origin router paths (`/jupyter/`, `/rstudio/`, `/vscode/`; Terminal uses `/vscode/`), never raw container ports. Behind Studio no configuration is needed. When Launcher is opened directly on port `5190`, set `REACT_APP_IDE_BASE_URL` to the Studio router's origin.
 
 ### Backend runtime
 
@@ -160,6 +163,7 @@ Create React App embeds these in public JavaScript. Never put credentials in a `
 | `DOCKER_SOCKET_PATH` | `/var/run/proxy-socket/docker.sock` | Restricted Docker API socket |
 | `LAUNCHER_VERSION` | `0.1.0` | Manifest provenance version |
 | `LAUNCHER_ENVIRONMENTS_JSON` | fixed local candidates | Validated environment catalog |
+| `LAUNCHER_STATE_DIR` | unset (in-memory) | Writable directory for durable workspace manifests; mount a persistent volume here |
 | `WORKSPACE_MAX_CPU` | `16` | Maximum requested CPU |
 | `WORKSPACE_MAX_MEMORY_BYTES` | `68719476736` | Maximum requested memory |
 | `WORKSPACE_MAX_GPU` | `8` | Maximum request; availability is separately candidate-bound |
@@ -186,7 +190,7 @@ Implemented today: validation/domain models, profiles, manifests, object URI par
 Deferred until authoritative contracts and provisioning backends exist:
 
 - object-service and run-service authorization/metadata integration;
-- durable manifest storage and export/recreate/audit workflows;
+- manifest export/recreate/audit workflows;
 - per-user container creation and true concurrent workspace isolation;
 - Kubernetes, Slurm, AWS, and Azure provisioning;
 - arbitrary package installation or dependency solving;
@@ -197,9 +201,7 @@ The fixed-container model is inherently shared infrastructure. `platform.manage_
 
 ## Known technical debt
 
-- The object-launch URL derives only the hostname from `REACT_APP_JUPYTER_BASE` and uses port `8888`.
-- The IDE service component's VS Code URL uses port `8080`, while the backend/container convention is `8083`.
 - Some legacy React async tests emit `act(...)` warnings despite passing.
 - Create React App and its dependency tree report upstream audit findings; upgrading the frontend toolchain is separate from this bounded enhancement.
-- Manifest persistence and per-user runtime isolation require a verified owning service/deployment contract.
+- Manifests persist to a local JSON file for a single Launcher instance; shared storage across replicas and per-user runtime isolation require a verified owning service/deployment contract.
 - License metadata is inconsistent: no `LICENSE` file is tracked while workflow metadata says MIT.

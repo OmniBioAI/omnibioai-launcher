@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import WorkspaceBuilder from './WorkspaceBuilder';
 
@@ -46,7 +46,7 @@ async function renderLoaded(props = {}) {
   const onOpenIde = jest.fn();
   const onBrowseObjects = jest.fn();
   render(<WorkspaceBuilder baseUrl="" onOpenIde={onOpenIde} onBrowseObjects={onBrowseObjects} {...props} />);
-  await screen.findByRole('radio', { name: /Generic Python/i });
+  await screen.findByRole('radio', { name: /^Generic Python/i });
   return { onOpenIde, onBrowseObjects };
 }
 
@@ -224,9 +224,26 @@ describe('WorkspaceBuilder', () => {
     expect(screen.queryByText(/api_key/)).not.toBeInTheDocument();
   });
 
+  test('hides Debug from Run unless the server reports the run integration is configured', async () => {
+    installFetch();
+    await renderLoaded();
+    expect(screen.queryByRole('heading', { name: 'Debug from Run' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Run reference')).not.toBeInTheDocument();
+    cleanup();
+
+    installFetch({ profiles: { profiles: PROFILES, resource_limits: LIMITS, features: { debug_from_run: false } } });
+    await renderLoaded();
+    expect(screen.queryByLabelText('Run reference')).not.toBeInTheDocument();
+    cleanup();
+
+    installFetch({ profiles: { profiles: PROFILES, resource_limits: LIMITS, features: { debug_from_run: true } } });
+    await renderLoaded();
+    expect(screen.getByRole('heading', { name: 'Debug from Run' })).toBeInTheDocument();
+  });
+
   test('handles Debug-from-Run malformed input and unavailable 501 integration truthfully', async () => {
     const debug = jest.fn(() => jsonResponse({ error: 'run authorization integration is not configured' }, 501));
-    installFetch({ debug });
+    installFetch({ debug, profiles: { profiles: PROFILES, resource_limits: LIMITS, features: { debug_from_run: true } } });
     await renderLoaded();
     const input = screen.getByLabelText('Run reference');
     await userEvent.type(input, 'omnibioai://dataset/not-a-run');
@@ -244,5 +261,76 @@ describe('WorkspaceBuilder', () => {
     const { onBrowseObjects } = await renderLoaded();
     await userEvent.click(screen.getByRole('button', { name: 'Browse' }));
     expect(onBrowseObjects).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WorkspaceBuilder deployment compatibility', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const WITH_COMPAT = PROFILES.map((profile) => ({
+    ...profile,
+    compatible_ides: {
+      'generic-python': ['jupyterlab', 'vscode', 'terminal'],
+      'generic-r': ['rstudio', 'vscode', 'terminal'],
+      'rna-seq': ['jupyterlab', 'rstudio', 'vscode', 'terminal'],
+      'single-cell': ['jupyterlab', 'rstudio', 'vscode', 'terminal'],
+      'variant-analysis': ['jupyterlab', 'vscode', 'terminal'],
+      proteomics: [],
+      'ml-ai-development': [],
+    }[profile.id],
+  }));
+
+  test('profiles no environment can satisfy are disabled and cannot be selected', async () => {
+    installFetch({ profiles: { profiles: WITH_COMPAT, resource_limits: { ...LIMITS, gpu: 0 } } });
+    await renderLoaded();
+    const proteomics = screen.getByRole('radio', { name: /Proteomics/ });
+    expect(proteomics).toHaveAttribute('aria-disabled', 'true');
+    expect(proteomics).toHaveTextContent('Not available in this deployment');
+    await userEvent.click(proteomics);
+    expect(proteomics).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('radio', { name: /^Generic Python/ })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText('GPU requests are disabled in this deployment.')).toBeInTheDocument();
+  });
+
+  test('environments incompatible with the profile are disabled', async () => {
+    installFetch({ profiles: { profiles: WITH_COMPAT, resource_limits: LIMITS } });
+    await renderLoaded();
+    const ideSection = screen.getByRole('region', { name: 'Select Environment' });
+    const rstudio = within(ideSection).getByRole('radio', { name: /RStudio/ });
+    expect(rstudio).toHaveAttribute('aria-disabled', 'true');
+    expect(rstudio).toHaveTextContent('Not compatible with Generic Python');
+    await userEvent.click(rstudio);
+    expect(rstudio).toHaveAttribute('aria-checked', 'false');
+  });
+
+  test('exited containers show as Stopped, not Unavailable', async () => {
+    installFetch();
+    global.fetch.mockImplementation((url) => {
+      if (url.endsWith('/api/launcher/v1/profiles')) return jsonResponse({ profiles: PROFILES, resource_limits: LIMITS });
+      if (url.includes('/api/launcher/status/')) return jsonResponse({ status: 'exited' });
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    await renderLoaded();
+    const services = screen.getByRole('region', { name: 'Running services' });
+    expect(await within(services).findAllByText('Stopped')).toHaveLength(4);
+    expect(within(services).queryByText('Unavailable')).not.toBeInTheDocument();
+  });
+
+  test('a running selected service is called out before validation', async () => {
+    installFetch();
+    await renderLoaded();
+    expect(await screen.findByText(/JupyterLab is already running/)).toBeInTheDocument();
+  });
+
+  test('fractional GiB memory is sent as whole bytes and the label reflects customization', async () => {
+    let body;
+    installFetch({ validate: (url, init) => { body = JSON.parse(init.body); return jsonResponse(validationPayload()); } });
+    await renderLoaded();
+    expect(screen.getByText('Profile defaults applied')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Memory value in GiB'), { target: { value: '4.1' } });
+    expect(screen.getByText('Customized')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Validate configuration' }));
+    expect(Number.isInteger(body.resources.memory_bytes)).toBe(true);
+    expect(body.resources.memory_bytes).toBe(Math.round(4.1 * GiB));
   });
 });

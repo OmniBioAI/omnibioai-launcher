@@ -36,18 +36,32 @@ function selectWithKeyboard(event, values, current, onSelect) {
       : ['ArrowRight', 'ArrowDown'].includes(event.key) ? (currentIndex + 1) % values.length
         : (currentIndex - 1 + values.length) % values.length;
   onSelect(values[nextIndex]);
-  event.currentTarget.parentElement?.querySelectorAll('[role="radio"]')[nextIndex]?.focus();
+  // values may skip disabled cards, so focus by value rather than position.
+  event.currentTarget.parentElement?.querySelector(`[role="radio"][data-value="${values[nextIndex]}"]`)?.focus();
+}
+
+// Older servers don't send compatible_ides; treat that as "unknown, allow all"
+// so this UI keeps working against them.
+function profileIsAvailable(profile) {
+  return !Array.isArray(profile?.compatible_ides) || profile.compatible_ides.length > 0;
+}
+
+function ideIsCompatible(profile, ide) {
+  return !Array.isArray(profile?.compatible_ides) || profile.compatible_ides.includes(ide);
 }
 
 function ProfileCard({ profile, selected, onSelect, profileIds }) {
   const resource = profile.resources || {};
+  const available = profileIsAvailable(profile);
   return (
     <div
       role="radio"
       tabIndex={selected ? 0 : -1}
-      className={`profile-card${selected ? ' is-selected' : ''}`}
+      className={`profile-card${selected ? ' is-selected' : ''}${available ? '' : ' is-unavailable'}`}
+      data-value={profile.id}
       aria-checked={selected}
-      onClick={() => onSelect(profile)}
+      aria-disabled={!available}
+      onClick={() => { if (available) onSelect(profile); }}
       onKeyDown={(event) => selectWithKeyboard(event, profileIds, profile.id, (id) => onSelect({ ...profile, id }))}
     >
       <span className="selection-mark" aria-hidden="true">{selected ? '✓' : ''}</span>
@@ -57,19 +71,22 @@ function ProfileCard({ profile, selected, onSelect, profileIds }) {
         {resource.cpu} CPU · {formatMemory(resource.memory_bytes)}
         {profile.gpu_preference ? ' · GPU preferred, not guaranteed' : ''}
       </span>
+      {!available && <span className="card-note">Not available in this deployment</span>}
     </div>
   );
 }
 
-function EnvironmentCard({ option, selected, onSelect, environmentIds }) {
+function EnvironmentCard({ option, selected, onSelect, environmentIds, compatible, profileName }) {
   return (
     <div
       role="radio"
       tabIndex={selected ? 0 : -1}
       aria-checked={selected}
-      className={`ide-choice${selected ? ' is-selected' : ''}`}
+      aria-disabled={!compatible}
+      className={`ide-choice${selected ? ' is-selected' : ''}${compatible ? '' : ' is-unavailable'}`}
+      data-value={option.id}
       style={{ '--ide-accent': option.accent }}
-      onClick={() => onSelect(option.id)}
+      onClick={() => { if (compatible) onSelect(option.id); }}
       onKeyDown={(event) => selectWithKeyboard(event, environmentIds, option.id, onSelect)}
     >
       <span className="selection-mark" aria-hidden="true">{selected ? '✓' : ''}</span>
@@ -77,6 +94,7 @@ function EnvironmentCard({ option, selected, onSelect, environmentIds }) {
       <span className="ide-choice-copy">
         <strong>{option.label}</strong>
         <span>{option.description}</span>
+        {!compatible && <span className="card-note">Not compatible with {profileName || 'this profile'}</span>}
       </span>
     </div>
   );
@@ -93,8 +111,21 @@ function ServiceCard({ option, status, onOpen }) {
   </article>;
 }
 
+// Docker reports container State.Status as created | running | paused |
+// restarting | removing | exited | dead. Only the exact strings running,
+// starting and stopped used to be recognised, so a stopped (exited) container
+// was shown as "Unavailable" -- indistinguishable from a broken lookup.
+const DOCKER_STATUS = Object.freeze({
+  running: 'running', starting: 'starting', restarting: 'starting',
+  stopped: 'stopped', exited: 'stopped', created: 'stopped', paused: 'stopped', dead: 'stopped',
+});
+
+function normalizeStatus(status) {
+  return DOCKER_STATUS[status] || 'unknown';
+}
+
 function StatusBadge({ status = 'unknown' }) {
-  const normalized = ['running', 'starting', 'stopped'].includes(status) ? status : 'unknown';
+  const normalized = normalizeStatus(status);
   const label = { running: 'Running', starting: 'Starting', stopped: 'Stopped', unknown: 'Unavailable' }[normalized];
   return <span className={`status-badge status-badge--${normalized}`}><span aria-hidden="true" />{label}</span>;
 }
@@ -112,6 +143,19 @@ function profileResources(profile, limits) {
     memory_bytes: Math.min(requested.memory_bytes ?? 4 * 1024 ** 3, limits?.memory_bytes ?? Number.POSITIVE_INFINITY),
     gpu: Math.min(requested.gpu ?? 0, limits?.gpu ?? Number.POSITIVE_INFINITY),
   };
+}
+
+// The profile's preferred IDE when it can satisfy the profile, otherwise the
+// first IDE that can (e.g. a profile whose preferred IDE lacks its packages).
+function environmentForProfile(profile) {
+  if (ideIsCompatible(profile, profile?.preferred_ide)) return profile?.preferred_ide;
+  return ENVIRONMENT_OPTIONS.find((option) => ideIsCompatible(profile, option.id))?.id || profile?.preferred_ide;
+}
+
+// Memory is sent in bytes and the API requires an integer; typed GiB values
+// such as 4.1 produced 4402341478.4 bytes and a confusing 400 on validate.
+function gibToBytes(value) {
+  return Math.round(Number(value) * 1024 ** 3);
 }
 
 function ObjectReferenceEditor({ objects, onChange, onBrowseObjects, browseButtonRef }) {
@@ -234,6 +278,9 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
   const [runReference, setRunReference] = useState('');
   const [debugMessage, setDebugMessage] = useState('');
   const [debugging, setDebugging] = useState(false);
+  // Hidden unless the server says its run resolver and authorizer are wired;
+  // an older server without the flag also keeps it hidden.
+  const [debugFromRunAvailable, setDebugFromRunAvailable] = useState(false);
   const launchInFlight = useRef(false);
   const latestRequestFingerprint = useRef('');
 
@@ -273,10 +320,12 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
         const available = Array.isArray(payload.profiles) ? payload.profiles : [];
         setProfiles(available);
         setLimits(payload.resource_limits || null);
+        setDebugFromRunAvailable(payload.features?.debug_from_run === true);
         if (available.length) {
-          const initial = available.find((profile) => profile.id === 'generic-python') || available[0];
+          const usable = available.filter(profileIsAvailable);
+          const initial = usable.find((profile) => profile.id === 'generic-python') || usable[0] || available[0];
           setProfileId(initial.id);
-          setEnvironment(initial.preferred_ide);
+          setEnvironment(environmentForProfile(initial));
           setResources((current) => ({ ...current, ...profileResources(initial, payload.resource_limits), architecture: '' }));
         }
       })
@@ -302,8 +351,9 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
   }, [refreshStatuses]);
 
   const selectProfile = (profile) => {
+    if (!profileIsAvailable(profile)) return;
     setProfileId(profile.id);
-    setEnvironment(profile.preferred_ide);
+    setEnvironment(environmentForProfile(profile));
     setResources((current) => ({ ...current, ...profileResources(profile, limits) }));
     markDirty();
   };
@@ -400,9 +450,14 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
     finally { setDebugging(false); }
   };
 
-  const resourceMax = limits || { cpu: 16, memory_bytes: 64 * 1024 ** 3, gpu: 8 };
-  const selectedEnvironmentLabel = ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.label;
   const launchSucceeded = Boolean(launchResult?.manifest);
+  const resourceMax = limits || { cpu: 16, memory_bytes: 64 * 1024 ** 3, gpu: 8 };
+  const profileDefaults = selectedProfile ? profileResources(selectedProfile, limits) : null;
+  const usingProfileDefaults = !profileDefaults || (resources.cpu === profileDefaults.cpu &&
+    resources.memory_bytes === profileDefaults.memory_bytes && resources.gpu === profileDefaults.gpu && !resources.architecture);
+  const selectedTool = ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.tool;
+  const selectedServiceRunning = normalizeStatus(statuses[selectedTool]) === 'running' && !launchSucceeded;
+  const selectedEnvironmentLabel = ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.label;
   const validationState = validating ? 'Validating' : validationError ? 'Validation failed' : isValidated ? 'Validated' : 'Not validated';
   const currentStep = isValidated ? 6 : 4;
   const workflowSteps = [
@@ -444,12 +499,12 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
             <div className="panel-heading"><div><span className="step-number">01</span><h2 id="profile-heading">Choose Workspace Profile</h2></div><span className="optional-label">Required</span></div>
             {profilesError && <div className="inline-message inline-message--error" role="alert">{profilesError}</div>}
             {!profiles.length && !profilesError && <div className="profile-skeleton" aria-label="Loading workspace profiles">Loading profiles…</div>}
-            <div className="profile-grid" role="radiogroup" aria-label="Workspace profile">{profiles.map((profile) => <ProfileCard key={profile.id} profile={profile} selected={profile.id === profileId} onSelect={(next) => selectProfile(profiles.find((item) => item.id === next.id) || profile)} profileIds={profiles.map((item) => item.id)} />)}</div>
+            <div className="profile-grid" role="radiogroup" aria-label="Workspace profile">{profiles.map((profile) => <ProfileCard key={profile.id} profile={profile} selected={profile.id === profileId} onSelect={(next) => selectProfile(profiles.find((item) => item.id === next.id) || profile)} profileIds={profiles.filter(profileIsAvailable).map((item) => item.id)} />)}</div>
           </section>
 
           <section className="config-panel" aria-labelledby="environment-heading">
             <div className="panel-heading"><div><span className="step-number">02</span><h2 id="environment-heading">Select Environment</h2></div><span className="optional-label">Required</span></div>
-            <div className="ide-grid" role="radiogroup" aria-label="Workspace environment">{ENVIRONMENT_OPTIONS.map((option) => <EnvironmentCard key={option.id} option={option} selected={environment === option.id} environmentIds={ENVIRONMENT_OPTIONS.map((item) => item.id)} onSelect={(next) => { setEnvironment(next); markDirty(); }} />)}</div>
+            <div className="ide-grid" role="radiogroup" aria-label="Workspace environment">{ENVIRONMENT_OPTIONS.map((option) => <EnvironmentCard key={option.id} option={option} selected={environment === option.id} compatible={ideIsCompatible(selectedProfile, option.id)} profileName={selectedProfile?.name} environmentIds={ENVIRONMENT_OPTIONS.filter((item) => ideIsCompatible(selectedProfile, item.id)).map((item) => item.id)} onSelect={(next) => { setEnvironment(next); markDirty(); }} />)}</div>
           </section>
 
           <section className="config-panel" aria-labelledby="objects-heading">
@@ -458,21 +513,21 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
           </section>
 
           <section className="config-panel" aria-labelledby="compute-heading">
-            <div className="panel-heading"><div><span className="step-number">04</span><h2 id="compute-heading">Configure Compute</h2></div><span className="optional-label">Profile defaults applied</span></div>
+            <div className="panel-heading"><div><span className="step-number">04</span><h2 id="compute-heading">Configure Compute</h2></div><span className="optional-label">{usingProfileDefaults ? 'Profile defaults applied' : 'Customized'}</span></div>
             <div className="resource-grid">
               <label><span id="cpu-label">CPU</span><div className="range-number"><input aria-labelledby="cpu-label" type="range" min="0.25" max={resourceMax.cpu} step="0.25" value={resources.cpu} onChange={(event) => { setResources({ ...resources, cpu: Number(event.target.value) }); markDirty(); }} /><input aria-label="CPU value" type="number" min="0.25" max={resourceMax.cpu} step="0.25" value={resources.cpu} onChange={(event) => { setResources({ ...resources, cpu: Number(event.target.value) }); markDirty(); }} /></div></label>
-              <label><span id="memory-label">Memory (GiB)</span><div className="range-number"><input aria-labelledby="memory-label" type="range" min="0.25" max={resourceMax.memory_bytes / 1024 ** 3} step="0.25" value={resources.memory_bytes / 1024 ** 3} onChange={(event) => { setResources({ ...resources, memory_bytes: Number(event.target.value) * 1024 ** 3 }); markDirty(); }} /><input aria-label="Memory value in GiB" type="number" min="0.25" max={resourceMax.memory_bytes / 1024 ** 3} step="0.25" value={resources.memory_bytes / 1024 ** 3} onChange={(event) => { setResources({ ...resources, memory_bytes: Number(event.target.value) * 1024 ** 3 }); markDirty(); }} /></div></label>
+              <label><span id="memory-label">Memory (GiB)</span><div className="range-number"><input aria-labelledby="memory-label" type="range" min="0.25" max={resourceMax.memory_bytes / 1024 ** 3} step="0.25" value={resources.memory_bytes / 1024 ** 3} onChange={(event) => { setResources({ ...resources, memory_bytes: gibToBytes(event.target.value) }); markDirty(); }} /><input aria-label="Memory value in GiB" type="number" min="0.25" max={resourceMax.memory_bytes / 1024 ** 3} step="0.25" value={resources.memory_bytes / 1024 ** 3} onChange={(event) => { setResources({ ...resources, memory_bytes: gibToBytes(event.target.value) }); markDirty(); }} /></div></label>
               <label><span id="gpu-label">GPU</span><div className="range-number"><input aria-labelledby="gpu-label" type="range" min="0" max={resourceMax.gpu} step="1" value={resources.gpu} disabled={resourceMax.gpu === 0} onChange={(event) => { setResources({ ...resources, gpu: Number(event.target.value) }); markDirty(); }} /><input aria-label="GPU value" type="number" min="0" max={resourceMax.gpu} step="1" value={resources.gpu} disabled={resourceMax.gpu === 0} onChange={(event) => { setResources({ ...resources, gpu: Number(event.target.value) }); markDirty(); }} /></div><small>{resourceMax.gpu === 0 ? 'GPU requests are disabled in this deployment.' : 'Requested only; availability is verified at launch.'}</small></label>
               <label><span>Architecture</span><select aria-label="Architecture" value={resources.architecture} onChange={(event) => { setResources({ ...resources, architecture: event.target.value }); markDirty(); }}><option value="">Auto</option><option value="amd64">amd64</option><option value="arm64">arm64</option></select></label>
             </div>
             <details className="advanced-details"><summary>Advanced resource details</summary><p>Server limits: up to {resourceMax.cpu} CPU, {formatMemory(resourceMax.memory_bytes)} memory, and {resourceMax.gpu} requested GPUs. Docker compatibility and actual GPU allocation are verified server-side.</p></details>
           </section>
 
-          <section className="config-panel debug-panel" aria-labelledby="debug-heading">
+          {debugFromRunAvailable && <section className="config-panel debug-panel" aria-labelledby="debug-heading">
             <div className="panel-heading"><div><span className="step-number">◇</span><h2 id="debug-heading">Debug from Run</h2></div><span className="optional-label">Deployment dependent</span></div>
             <div className="object-input-row"><label className="sr-only" htmlFor="run-reference">Run reference</label><input id="run-reference" value={runReference} onChange={(event) => setRunReference(event.target.value)} placeholder="omnibioai://run/<id>" /><button type="button" className="button button--secondary" disabled={debugging} onClick={debugFromRun}>{debugging ? 'Checking…' : 'Debug from Run'}</button></div>
             {debugMessage && <p className="field-help" role="status">{debugMessage}</p>}
-          </section>
+          </section>}
         </div>
 
         <div className="workspace-review-column">
@@ -481,6 +536,7 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
             {validationError && <div className="inline-message inline-message--error" role="alert">{validationError}</div>}
             {launchError && <div className="inline-message inline-message--error" role="alert">{launchError}</div>}
             {launchSucceeded && <div className="inline-message inline-message--success" role="status">Workspace {launchResult.workspace_id} is running.</div>}
+            {selectedServiceRunning && <div className="inline-message inline-message--info" role="status">{selectedEnvironmentLabel} is already running{environment === 'vscode' || environment === 'terminal' ? ' (VS Code and Terminal share one container)' : ''}. Open it from Running services, or stop it to launch with new resource settings.</div>}
             <button type="button" className="button button--secondary button--wide" disabled={validating || launching || !profileId} onClick={validate}>{validating ? 'Validating…' : 'Validate configuration'}</button>
             <button type="button" className="button button--primary button--wide" disabled={!isValidated || launching || validating || !profileId} aria-disabled={!isValidated || launching || validating || !profileId} onClick={launch}>{launching ? 'Launching workspace…' : 'Launch Workspace'}</button>
             {!isValidated && <p className="launch-helper">Validate the configuration to enable launch.</p>}
