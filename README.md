@@ -147,10 +147,13 @@ run reference -> service authorization -> run metadata resolver
 | Variable | Default | Purpose |
 |---|---|---|
 | `REACT_APP_OMNIBIOAI_BASE_URL` | `http://127.0.0.1:8000` | Backend/API gateway base URL |
-| `REACT_APP_JUPYTER_BASE` | `http://127.0.0.1:8890` | Hostname source for object launch |
+| `REACT_APP_IDE_BASE_URL` | page origin | Origin (optionally with a path prefix) serving Studio's `/jupyter/`, `/rstudio/` and `/vscode/` IDE routes |
+| `REACT_APP_JUPYTER_BASE` | — | Deprecated and unused; still accepted so existing Studio builds keep working |
 | `REACT_APP_USE_MOCK` | `false` | Local mock object data |
 
 Create React App embeds these in public JavaScript. Never put credentials in a `REACT_APP_*` variable.
+
+IDE links ("Open ↗", object launch) use Studio's same-origin router paths (`/jupyter/`, `/rstudio/`, `/vscode/`; Terminal uses `/vscode/`), never raw container ports. Behind Studio no configuration is needed. When Launcher is opened directly on port `5190`, set `REACT_APP_IDE_BASE_URL` to the Studio router's origin.
 
 ### Backend runtime
 
@@ -197,8 +200,7 @@ The fixed-container model is inherently shared infrastructure. `platform.manage_
 
 ## Known technical debt
 
-- The object-launch URL derives only the hostname from `REACT_APP_JUPYTER_BASE` and uses port `8888`.
-- The IDE service component's VS Code URL uses port `8080`, while the backend/container convention is `8083`.
+- The unused `IdeCard` component still hardcodes `localhost` port URLs; the app opens IDEs through `src/ideUrls.js`.
 - Some legacy React async tests emit `act(...)` warnings despite passing.
 - Create React App and its dependency tree report upstream audit findings; upgrading the frontend toolchain is separate from this bounded enhancement.
 - Manifest persistence and per-user runtime isolation require a verified owning service/deployment contract.

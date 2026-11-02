@@ -6,14 +6,10 @@ import Toast from './components/Toast';
 import InstallModal from './components/InstallModal';
 import WorkspaceBuilder from './components/WorkspaceBuilder';
 import { authHeaders } from './session';
+import { ideUrl } from './ideUrls';
 
 const BASE_URL = process.env.REACT_APP_OMNIBIOAI_BASE_URL || 'http://127.0.0.1:8000';
-const JUPYTER_BASE = process.env.REACT_APP_JUPYTER_BASE || 'http://127.0.0.1:8890';
 const USE_MOCK = process.env.REACT_APP_USE_MOCK === 'true';
-const HOST_IP = (() => {
-  try { return new URL(process.env.REACT_APP_OMNIBIOAI_BASE_URL || '').hostname; }
-  catch { return '192.168.86.234'; }
-})();
 const PAGE_SIZE = 20;
 
 // ── Mock data ─────────────────────────────────────────────────────────
@@ -948,10 +944,9 @@ function App() {
       .catch(() => setLoading(false));
   }, []);
 
-  const jupyterHost = (() => { try { return new URL(JUPYTER_BASE).hostname || HOST_IP; } catch { return HOST_IP; } })();
   // No token in the URL: Jupyter authenticates the user itself (its login page asks
   // for the token, which is delivered out-of-band, never through this bundle).
-  const notebookUrl = `http://${jupyterHost}:8888/?omnibioai_object_id=${objectId}`;
+  const notebookUrl = ideUrl('jupyterlab', { query: { omnibioai_object_id: objectId || '' } });
 
   const buildRScript = () => {
     const name = obj?.name || obj?.object_type || 'Unknown';
@@ -980,9 +975,9 @@ function App() {
     if (type === 'notebook') {
       openUrl(notebookUrl);
     } else if (type === 'vscode') {
-      openUrl(`http://${HOST_IP}:8083`);
+      openUrl(ideUrl('vscode'));
     } else if (type === 'r') {
-      openUrl(`http://${HOST_IP}:8787`);
+      openUrl(ideUrl('rstudio'));
     }
   };
 
@@ -994,10 +989,8 @@ function App() {
   };
 
   const openWorkspaceIde = (ide) => {
-    if (ide === 'jupyterlab') openUrl(`http://${jupyterHost}:8888/`);
-    else if (ide === 'vscode') openUrl(`http://${HOST_IP}:8083`);
-    else if (ide === 'terminal') openUrl(`http://${HOST_IP}:8083`);
-    else if (ide === 'rstudio') openUrl(`http://${HOST_IP}:8787`);
+    const url = ideUrl(ide);
+    if (url) openUrl(url);
   };
 
   // ── Workspace builder (default) ───────────────────────────────────
