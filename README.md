@@ -133,7 +133,7 @@ run reference -> service authorization -> run metadata resolver
 - IAM validation and lifecycle permission checks fail closed.
 - Authoritative identity overrides are impossible because unknown request fields are rejected.
 - Both user and organization ownership are checked for manifests; cross-tenant misses return `404`.
-- Resource values have server-configured bounds and are converted only to fixed Docker `NanoCpus` and `Memory` fields.
+- Resource values have server-configured bounds and are converted only to fixed Docker `NanoCpus`, `Memory` and `MemorySwap` fields (`MemorySwap` = `Memory`: no swap).
 - Container names, mounts, paths, devices, privileged mode, and arbitrary Docker options are not client-controlled.
 - Object/run identifiers are context, not authorization.
 - Images use a strict reference grammar; client constraints cannot introduce a new candidate.

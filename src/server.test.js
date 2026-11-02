@@ -60,9 +60,11 @@ function dockerReply(statusCode, body, error) {
 }
 
 function dockerReplySequence(replies) {
+  const payloads = [];
   mockDockerRequest = jest.fn((options, callback) => {
     const request = new EventEmitter();
-    request.end = () => {
+    request.end = (payload) => {
+      payloads.push(payload === undefined ? undefined : JSON.parse(payload));
       const reply = replies.shift();
       if (reply.error) return process.nextTick(() => request.emit('error', reply.error));
       const response = new EventEmitter();
@@ -75,6 +77,7 @@ function dockerReplySequence(replies) {
     };
     return request;
   });
+  mockDockerRequest.payloads = payloads;
 }
 
 
@@ -258,13 +261,22 @@ describe('launcher Express API', () => {
         ['POST', '/containers/omnibioai-jupyter/update'],
         ['POST', '/containers/omnibioai-jupyter/start'],
       ]);
+      expect(mockDockerRequest.payloads[2]).toEqual({ NanoCpus: 2_000_000_000, Memory: 4 * 1024 ** 3, MemorySwap: 4 * 1024 ** 3 });
       serverModule.manifests.clear();
     });
 
     test('resource translation emits only bounded Docker CPU and memory controls', () => {
       const update = serverModule.dockerResourceUpdate({ cpu: 1.5, memory_bytes: 536870912, privileged: true, mounts: ['/host'] });
-      expect(update).toEqual({ NanoCpus: 1500000000, Memory: 536870912 });
-      expect(Object.keys(update)).toEqual(['NanoCpus', 'Memory']);
+      expect(update).toEqual({ NanoCpus: 1500000000, Memory: 536870912, MemorySwap: 536870912 });
+      expect(Object.keys(update)).toEqual(['NanoCpus', 'Memory', 'MemorySwap']);
+    });
+
+    test('memory updates always pin MemorySwap to Memory, so a larger relaunch is not rejected by a stale swap limit', () => {
+      for (const memory_bytes of [4 * 1024 ** 3, 16 * 1024 ** 3, 2.5 * 1024 ** 3]) {
+        const update = serverModule.dockerResourceUpdate({ cpu: 1, memory_bytes });
+        expect(update.MemorySwap).toBe(update.Memory);
+        expect(Number.isInteger(update.MemorySwap)).toBe(true);
+      }
     });
 
     test('workspace manifests are isolated by both user and organization', async () => {

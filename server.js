@@ -152,10 +152,23 @@ function resolver() {
   return new ConfigEnvironmentResolver();
 }
 
+// MemorySwap is always sent with Memory. Without it Docker keeps the
+// container's previous swap limit and rejects any Memory above it ("Memory
+// limit should be smaller than already set memoryswap limit"), so a 4 GiB
+// launch followed by a 16 GiB launch failed.
+//
+// Policy: no swap (MemorySwap = Memory). The requested memory is then the hard
+// ceiling the manifest records, and one workspace on a shared host can't thrash
+// the host's swap. The trade-off: a workspace that exceeds its limit is
+// OOM-killed instead of slowing down. Allowing swap (e.g. 2x Memory, or -1 for
+// unlimited) would soften that, but it makes the effective limit larger than
+// what was requested and validated.
 function dockerResourceUpdate(resources) {
+  const memory = Math.round(resources.memory_bytes);
   return Object.freeze({
     NanoCpus: Math.round(resources.cpu * 1_000_000_000),
-    Memory: Math.round(resources.memory_bytes),
+    Memory: memory,
+    MemorySwap: memory,
   });
 }
 
