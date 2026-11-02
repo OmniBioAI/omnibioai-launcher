@@ -99,7 +99,6 @@ button:disabled { cursor: not-allowed; }
 }
 
 html[data-embedded="true"] .header { display: none; }
-html[data-embedded="true"] .brand-lockup { display: none; }
 
 .logo-wrap {
   display: flex;
@@ -497,40 +496,8 @@ html[data-embedded="true"] .brand-lockup { display: none; }
   padding: 0 32px 64px;
 }
 
-.workspace-hero {
-  min-height: 64px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  border-bottom: 1px solid var(--border);
-}
-
-.brand-lockup { display: flex; align-items: center; gap: 10px; }
-.brand-mark {
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius);
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 15px;
-  font-weight: 800;
-  box-shadow: 0 0 22px color-mix(in srgb, var(--color-accent) 16%, transparent);
-}
-.brand-lockup div { display: grid; gap: 1px; }
-.brand-lockup strong { font-size: 14px; color: var(--text); letter-spacing: -0.01em; }
-.brand-lockup div span { color: var(--muted); font-family: var(--font-mono); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
-
-.workspace-intro {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 32px;
-  padding: 36px 0 28px;
-}
-.workspace-intro h1 { color: var(--text); font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.03em; margin-top: 8px; }
+.workspace-intro { padding: 28px 0 20px; }
+.workspace-intro h1 { color: var(--text); font-size: clamp(24px, 2.6vw, 30px); line-height: 1.15; letter-spacing: -.03em; }
 .workspace-intro p { max-width: 660px; color: var(--text-secondary); font-size: 14px; line-height: 1.6; margin-top: 10px; }
 .eyebrow, .step-number, .optional-label {
   font-family: var(--font-mono);
@@ -542,26 +509,12 @@ html[data-embedded="true"] .brand-lockup { display: none; }
 .step-number { margin-right: 10px; }
 .optional-label { color: var(--muted); }
 
-.services-section { margin-bottom: 30px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg3); }
 .object-picker-overlay { position: fixed; inset: 0; z-index: 100; overflow: auto; padding-top: 20px; background: var(--bg); }
 .object-picker-overlay [style*="font-size: 10px"], .object-picker-overlay [style*="font-size: 11px"] { font-size: 12px !important; }
 .object-picker-overlay [style*="color:"] { color: var(--color-text-muted) !important; }
 .object-picker-overlay [role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .object-picker-overlay button, .object-picker-overlay input, .object-picker-overlay select { min-height: 44px !important; height: 44px !important; font-size: 12px !important; }
 .object-picker-overlay div[style*="height: 36px"] { height: auto !important; min-height: 44px; }
-.section-heading, .new-workspace-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 16px; }
-.section-heading h2, .new-workspace-heading h2 { margin-top: 4px; color: var(--text); font-size: 22px; }
-.section-heading p, .new-workspace-heading p { max-width: 650px; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
-.new-workspace-heading { display: block; margin: 0 0 16px; }
-.new-workspace-heading p { margin-top: 5px; }
-.service-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.service-card { min-width: 0; min-height: 110px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-items: start; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg2); }
-.service-card-heading { min-width: 0; display: flex; align-items: center; gap: 8px; }
-.service-card-heading strong { min-width: 0; color: var(--text); font-size: 14px; }
-.service-card-heading .status-badge { margin-left: auto; }
-.service-description { grid-column: 1 / -1; color: var(--color-text-muted); font-size: 12px; line-height: 1.4; }
-.service-card .button, .service-unavailable { grid-column: 1 / -1; min-height: 44px; }
-.service-unavailable { display: flex; align-items: center; color: var(--muted); font-size: 12px; }
 
 .workspace-layout { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(320px, .8fr); gap: 18px; align-items: start; }
 .workspace-config { display: grid; gap: 14px; min-width: 0; }
@@ -620,6 +573,15 @@ html[data-embedded="true"] .brand-lockup { display: none; }
 .ide-choice-copy strong { color: var(--text); font-size: 13px; }
 .ide-choice-copy > span { color: var(--color-text-muted); font-size: 12px; line-height: 1.4; }
 .ide-choice .selection-mark { top: 8px; right: 8px; }
+/* Radio on top, status/Open row below: one card, two siblings, so the Open
+   button is never inside the radio. The row keeps full opacity on an
+   incompatible card because Open still works there. */
+.ide-option { min-width: 0; display: grid; grid-template-rows: 1fr auto; }
+.ide-option .ide-choice { border-radius: var(--radius) var(--radius) 0 0; }
+.ide-option-actions { min-width: 0; min-height: 58px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 10px 6px 14px; border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); background: var(--bg2); }
+.ide-option.is-selected .ide-option-actions { border-color: var(--color-accent-border); box-shadow: inset 1px 0 0 var(--color-accent-border), inset -1px -1px 0 var(--color-accent-border); }
+.ide-option-open { margin-left: auto; padding-inline: 14px; }
+.ide-option-note { order: 3; flex-basis: 100%; color: var(--color-text-muted); font-size: 12px; line-height: 1.4; }
 
 .status-badge { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; padding: 3px 7px; border-radius: var(--radius-xs); border: 1px solid var(--border); color: var(--muted); background: var(--color-bg-surface2); font-family: var(--font-mono); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
 .status-badge span { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
@@ -721,8 +683,6 @@ html[data-embedded="true"] .brand-lockup { display: none; }
 .workflow-step a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 @media (max-width: 1120px) {
-  .workspace-intro { align-items: flex-start; flex-direction: column; }
-  .service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .profile-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -736,11 +696,7 @@ html[data-embedded="true"] .brand-lockup { display: none; }
 
 @media (max-width: 700px) {
   .workspace-shell { padding-inline: 14px; }
-  .workspace-hero { min-height: 58px; }
-  .workspace-hero .button { padding-inline: 9px; }
-  .workspace-intro { padding-top: 24px; }
-  .section-heading, .new-workspace-heading { align-items: start; flex-direction: column; gap: 8px; }
-  .service-grid { grid-template-columns: 1fr; }
+  .workspace-intro { padding-top: 20px; }
   .ide-grid, .workspace-review-column { grid-template-columns: 1fr; }
   .config-panel { padding: 15px; }
   .object-input-row { align-items: stretch; flex-direction: column; }

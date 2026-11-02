@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 
@@ -49,9 +49,26 @@ describe('App', () => {
       return Promise.reject(new Error(`unexpected URL: ${url}`));
     });
     render(<App />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Open ↗' }));
+    const environments = await screen.findByRole('region', { name: 'Select Environment' });
+    await userEvent.click(await within(environments).findByRole('button', { name: 'Open JupyterLab ↗' }));
     expect(window.open).toHaveBeenCalledWith(`${window.location.origin}/jupyter/`, '_blank', 'noopener,noreferrer');
+    // The launch panel's primary Open action for the selected, running IDE
+    // takes the same route.
+    await userEvent.click(within(document.getElementById('launch-heading')).getByRole('button', { name: 'Open JupyterLab ↗' }));
+    expect(window.open).toHaveBeenLastCalledWith(`${window.location.origin}/jupyter/`, '_blank', 'noopener,noreferrer');
     expect(global.fetch).toHaveBeenCalledWith('/_svc/sdk/api/launcher/v1/profiles', expect.any(Object));
+  });
+
+  test('the workspace page has exactly one h1 and no duplicate launcher title', async () => {
+    window.history.replaceState({}, '', '/_svc/sdk');
+    render(<App />);
+    expect(await screen.findByRole('radio', { name: /Generic Python|JupyterLab/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getAllByText('Workspace Launcher')).toHaveLength(1);
+    expect(screen.queryByText('OmniBioAI', { selector: 'strong' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Running services' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Skip to workspace configuration' })).toHaveAttribute('href', '#main-content');
+    expect(document.getElementById('main-content')).toContainElement(screen.getByRole('heading', { level: 1 }));
   });
 
   test('object picker closes on Escape, traps Tab focus, and restores focus to Browse', async () => {

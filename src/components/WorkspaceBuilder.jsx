@@ -1,12 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { authHeaders } from '../session';
 
+// Each environment is a shared container (omnibioai-jupyter, -rstudio,
+// -vscode), not a per-user workspace. Terminal is VS Code Server's integrated
+// terminal, so it reads the VS Code container's status rather than its own.
 const ENVIRONMENT_OPTIONS = [
-  { id: 'jupyterlab', tool: 'jupyter', label: 'JupyterLab', description: 'Interactive notebooks and scientific exploration.', accent: '#f37726', icon: '◉' },
-  { id: 'rstudio', tool: 'rstudio', label: 'RStudio', description: 'R and Bioconductor development environment.', accent: '#276dc3', icon: 'R' },
-  { id: 'vscode', tool: 'vscode', label: 'VS Code', description: 'Browser-based editor for Python, R, and workflows.', accent: '#007acc', icon: '⌁' },
-  { id: 'terminal', tool: 'terminal', label: 'Terminal', description: 'Shell access for CLI tools, scripts, and workflows.', accent: '#00e5a0', icon: '>_' },
+  { id: 'jupyterlab', container: 'jupyter', label: 'JupyterLab', description: 'Interactive notebooks and scientific exploration.', accent: '#f37726', icon: '◉' },
+  { id: 'rstudio', container: 'rstudio', label: 'RStudio', description: 'R and Bioconductor development environment.', accent: '#276dc3', icon: 'R' },
+  { id: 'vscode', container: 'vscode', label: 'VS Code', description: 'Browser-based editor for Python, R, and workflows.', accent: '#007acc', icon: '⌁', note: 'Shared with Terminal' },
+  { id: 'terminal', container: 'vscode', label: 'Terminal', description: 'Shell access for CLI tools, scripts, and workflows.', accent: '#00e5a0', icon: '>_', note: 'Shares the VS Code container' },
 ];
+const CONTAINERS = [...new Set(ENVIRONMENT_OPTIONS.map((option) => option.container))];
 const OBJECT_REFERENCE = /^omnibioai:\/\/(dataset|workflow|model|run|tool)\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/;
 const SECRET_KEY = /(authorization|bearer|token|secret|password|passwd|credential|api[_-]?key|private[_-]?key|cookie)/i;
 
@@ -37,7 +41,7 @@ function selectWithKeyboard(event, values, current, onSelect) {
         : (currentIndex - 1 + values.length) % values.length;
   onSelect(values[nextIndex]);
   // values may skip disabled cards, so focus by value rather than position.
-  event.currentTarget.parentElement?.querySelector(`[role="radio"][data-value="${values[nextIndex]}"]`)?.focus();
+  event.currentTarget.closest('[role="radiogroup"]')?.querySelector(`[role="radio"][data-value="${values[nextIndex]}"]`)?.focus();
 }
 
 // Older servers don't send compatible_ides; treat that as "unknown, allow all"
@@ -76,39 +80,41 @@ function ProfileCard({ profile, selected, onSelect, profileIds }) {
   );
 }
 
-function EnvironmentCard({ option, selected, onSelect, environmentIds, compatible, profileName }) {
+// The radio holds only the selection; status and Open sit in a sibling row so
+// no interactive control is nested inside role="radio", and opening a running
+// container never changes the selection. Opening ignores profile
+// compatibility: it is not a launch with the selected profile.
+function EnvironmentCard({ option, selected, onSelect, environmentIds, compatible, profileName, status, onOpen }) {
+  const running = normalizeStatus(status) === 'running';
+  const statusId = `environment-status-${option.id}`;
   return (
-    <div
-      role="radio"
-      tabIndex={selected ? 0 : -1}
-      aria-checked={selected}
-      aria-disabled={!compatible}
-      className={`ide-choice${selected ? ' is-selected' : ''}${compatible ? '' : ' is-unavailable'}`}
-      data-value={option.id}
-      style={{ '--ide-accent': option.accent }}
-      onClick={() => { if (compatible) onSelect(option.id); }}
-      onKeyDown={(event) => selectWithKeyboard(event, environmentIds, option.id, onSelect)}
-    >
-      <span className="selection-mark" aria-hidden="true">{selected ? '✓' : ''}</span>
-      <span className="ide-choice-icon" aria-hidden="true">{option.icon}</span>
-      <span className="ide-choice-copy">
-        <strong>{option.label}</strong>
-        <span>{option.description}</span>
-        {!compatible && <span className="card-note">Not compatible with {profileName || 'this profile'}</span>}
-      </span>
+    <div className={`ide-option${selected ? ' is-selected' : ''}`} style={{ '--ide-accent': option.accent }}>
+      <div
+        role="radio"
+        tabIndex={selected ? 0 : -1}
+        aria-checked={selected}
+        aria-disabled={!compatible}
+        aria-describedby={statusId}
+        className={`ide-choice${selected ? ' is-selected' : ''}${compatible ? '' : ' is-unavailable'}`}
+        data-value={option.id}
+        onClick={() => { if (compatible) onSelect(option.id); }}
+        onKeyDown={(event) => selectWithKeyboard(event, environmentIds, option.id, onSelect)}
+      >
+        <span className="selection-mark" aria-hidden="true">{selected ? '✓' : ''}</span>
+        <span className="ide-choice-icon" aria-hidden="true">{option.icon}</span>
+        <span className="ide-choice-copy">
+          <strong>{option.label}</strong>
+          <span>{option.description}</span>
+          {!compatible && <span className="card-note">Not compatible with {profileName || 'this profile'}</span>}
+        </span>
+      </div>
+      <div className="ide-option-actions">
+        <StatusBadge id={statusId} status={status} />
+        {option.note && <span className="ide-option-note">{option.note}</span>}
+        {running && <button type="button" className="button button--open ide-option-open" onClick={() => onOpen(option.id)}>Open<span className="sr-only"> {option.label}</span> ↗</button>}
+      </div>
     </div>
   );
-}
-
-function ServiceCard({ option, status, onOpen }) {
-  const running = status === 'running';
-  return <article className="service-card" style={{ '--ide-accent': option.accent }}>
-    <div className="service-card-heading"><span className="ide-choice-icon" aria-hidden="true">{option.icon}</span><strong>{option.label}</strong><StatusBadge status={status} /></div>
-    <p className="service-description">{option.description}</p>
-    {running
-      ? <button type="button" className="button button--open" onClick={() => onOpen(option.id)}>Open ↗</button>
-      : <span className="service-unavailable">Not available to open</span>}
-  </article>;
 }
 
 // Docker reports container State.Status as created | running | paused |
@@ -124,10 +130,10 @@ function normalizeStatus(status) {
   return DOCKER_STATUS[status] || 'unknown';
 }
 
-function StatusBadge({ status = 'unknown' }) {
+function StatusBadge({ id, status = 'unknown' }) {
   const normalized = normalizeStatus(status);
   const label = { running: 'Running', starting: 'Starting', stopped: 'Stopped', unknown: 'Unavailable' }[normalized];
-  return <span className={`status-badge status-badge--${normalized}`}><span aria-hidden="true" />{label}</span>;
+  return <span id={id} className={`status-badge status-badge--${normalized}`}><span aria-hidden="true" />{label}</span>;
 }
 
 function formatMemory(bytes) {
@@ -265,7 +271,7 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
   const [environment, setEnvironment] = useState('jupyterlab');
   const [resources, setResources] = useState({ cpu: 2, memory_bytes: 4 * 1024 ** 3, gpu: 0, architecture: '' });
   const [objects, setObjects] = useState([]);
-  const [statuses, setStatuses] = useState({ jupyter: 'unknown', rstudio: 'unknown', vscode: 'unknown', terminal: 'unknown' });
+  const [statuses, setStatuses] = useState(() => Object.fromEntries(CONTAINERS.map((container) => [container, 'unknown'])));
   const [profilesError, setProfilesError] = useState('');
   const [validation, setValidation] = useState(null);
   const [validationFingerprint, setValidationFingerprint] = useState('');
@@ -334,12 +340,12 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
   }, [baseUrl]);
 
   const refreshStatuses = useCallback(async () => {
-    const results = await Promise.all(ENVIRONMENT_OPTIONS.map(async (option) => {
+    const results = await Promise.all(CONTAINERS.map(async (container) => {
       try {
-        const response = await fetch(`${baseUrl}/api/launcher/status/${option.tool}`, { headers: authHeaders() });
+        const response = await fetch(`${baseUrl}/api/launcher/status/${container}`, { headers: authHeaders() });
         const payload = await responseJson(response);
-        return [option.tool, response.ok ? payload.status || 'stopped' : 'unavailable'];
-      } catch { return [option.tool, 'unavailable']; }
+        return [container, response.ok ? payload.status || 'stopped' : 'unavailable'];
+      } catch { return [container, 'unavailable']; }
     }));
     setStatuses(Object.fromEntries(results));
   }, [baseUrl]);
@@ -425,8 +431,8 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
           setLaunchResult((current) => current ? { ...current, manifest: manifestPayload } : current);
         } catch (error) { setManifestError(error.message); }
       }
-      const tool = ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.tool;
-      if (tool) setStatuses((current) => ({ ...current, [tool]: 'running' }));
+      const container = ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.container;
+      if (container) setStatuses((current) => ({ ...current, [container]: 'running' }));
     } catch (error) { setLaunchError(error.message); }
     finally { launchInFlight.current = false; setLaunching(false); }
   };
@@ -455,8 +461,8 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
   const profileDefaults = selectedProfile ? profileResources(selectedProfile, limits) : null;
   const usingProfileDefaults = !profileDefaults || (resources.cpu === profileDefaults.cpu &&
     resources.memory_bytes === profileDefaults.memory_bytes && resources.gpu === profileDefaults.gpu && !resources.architecture);
-  const selectedTool = ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.tool;
-  const selectedServiceRunning = normalizeStatus(statuses[selectedTool]) === 'running' && !launchSucceeded;
+  const selectedContainer = ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.container;
+  const selectedServiceRunning = normalizeStatus(statuses[selectedContainer]) === 'running' && !launchSucceeded;
   const selectedEnvironmentLabel = ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.label;
   const validationState = validating ? 'Validating' : validationError ? 'Validation failed' : isValidated ? 'Validated' : 'Not validated';
   const currentStep = isValidated ? 6 : 4;
@@ -467,19 +473,10 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
 
   return (
     <main id="main-content" className="workspace-shell">
-      <header className="workspace-hero">
-        <div className="brand-lockup"><span className="brand-mark">O</span><div><strong>OmniBioAI</strong><span>Workspace Launcher</span></div></div>
-      </header>
-      <section className="workspace-intro">
-        <div><span className="eyebrow">Scientific workspace</span><h1>Workspace Launcher</h1><p>Open a running shared service, or configure and validate a new workspace launch.</p></div>
-      </section>
-
-      <section className="services-section" aria-labelledby="services-heading">
-        <div className="section-heading"><div><span className="eyebrow">Available now</span><h2 id="services-heading">Running services</h2></div><p>Service status is independent from the new workspace configuration below.</p></div>
-        <div className="service-grid">{ENVIRONMENT_OPTIONS.map((option) => <ServiceCard key={option.id} option={option} status={statuses[option.tool]} onOpen={onOpenIde} />)}</div>
-      </section>
-
-      <div className="new-workspace-heading"><span className="eyebrow">Configure and launch</span><h2>New workspace</h2><p>Profile, environment, architecture, CPU, memory, and GPU affect validation and the shared container selected or updated by the Launcher.</p></div>
+      <div className="workspace-intro">
+        <h1>Workspace Launcher</h1>
+        <p>Choose a profile and environment. Open a running environment, or validate and launch it with new resources.</p>
+      </div>
 
       <nav className="workflow-bar" aria-label="Workspace workflow">
         <ol>{workflowSteps.map(([target, label], index) => {
@@ -504,7 +501,7 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
 
           <section className="config-panel" aria-labelledby="environment-heading">
             <div className="panel-heading"><div><span className="step-number">02</span><h2 id="environment-heading">Select Environment</h2></div><span className="optional-label">Required</span></div>
-            <div className="ide-grid" role="radiogroup" aria-label="Workspace environment">{ENVIRONMENT_OPTIONS.map((option) => <EnvironmentCard key={option.id} option={option} selected={environment === option.id} compatible={ideIsCompatible(selectedProfile, option.id)} profileName={selectedProfile?.name} environmentIds={ENVIRONMENT_OPTIONS.filter((item) => ideIsCompatible(selectedProfile, item.id)).map((item) => item.id)} onSelect={(next) => { setEnvironment(next); markDirty(); }} />)}</div>
+            <div className="ide-grid" role="radiogroup" aria-label="Workspace environment">{ENVIRONMENT_OPTIONS.map((option) => <EnvironmentCard key={option.id} option={option} selected={environment === option.id} compatible={ideIsCompatible(selectedProfile, option.id)} profileName={selectedProfile?.name} status={statuses[option.container]} onOpen={onOpenIde} environmentIds={ENVIRONMENT_OPTIONS.filter((item) => ideIsCompatible(selectedProfile, item.id)).map((item) => item.id)} onSelect={(next) => { setEnvironment(next); markDirty(); }} />)}</div>
           </section>
 
           <section className="config-panel" aria-labelledby="objects-heading">
@@ -536,10 +533,11 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
             {validationError && <div className="inline-message inline-message--error" role="alert">{validationError}</div>}
             {launchError && <div className="inline-message inline-message--error" role="alert">{launchError}</div>}
             {launchSucceeded && <div className="inline-message inline-message--success" role="status">Workspace {launchResult.workspace_id} is running.</div>}
-            {selectedServiceRunning && <div className="inline-message inline-message--info" role="status">{selectedEnvironmentLabel} is already running{environment === 'vscode' || environment === 'terminal' ? ' (VS Code and Terminal share one container)' : ''}. Open it from Running services, or stop it to launch with new resource settings.</div>}
+            {selectedServiceRunning && <div className="inline-message inline-message--info" role="status">{selectedEnvironmentLabel} is already running{environment === 'vscode' || environment === 'terminal' ? ' (VS Code and Terminal share one container)' : ''}. Open it, or stop it to launch with new resource settings.</div>}
+            {selectedServiceRunning && <button type="button" className="button button--primary button--wide" onClick={() => onOpenIde(environment)}>Open {selectedEnvironmentLabel} ↗</button>}
             <button type="button" className="button button--secondary button--wide" disabled={validating || launching || !profileId} onClick={validate}>{validating ? 'Validating…' : 'Validate configuration'}</button>
-            <button type="button" className="button button--primary button--wide" disabled={!isValidated || launching || validating || !profileId} aria-disabled={!isValidated || launching || validating || !profileId} onClick={launch}>{launching ? 'Launching workspace…' : 'Launch Workspace'}</button>
-            {!isValidated && <p className="launch-helper">Validate the configuration to enable launch.</p>}
+            <button type="button" className={`button ${selectedServiceRunning ? 'button--secondary' : 'button--primary'} button--wide`} disabled={!isValidated || launching || validating || !profileId || selectedServiceRunning} aria-disabled={!isValidated || launching || validating || !profileId || selectedServiceRunning} onClick={launch}>{launching ? 'Launching workspace…' : 'Launch Workspace'}</button>
+            {!isValidated && !selectedServiceRunning && <p className="launch-helper">Validate the configuration to enable launch.</p>}
             {launchSucceeded && <button type="button" className="button button--open button--wide" onClick={() => onOpenIde(environment)}>Open {ENVIRONMENT_OPTIONS.find((option) => option.id === environment)?.label} ↗</button>}
             <p>Launch validates the request, applies CPU and memory limits to the selected shared <strong>{selectedEnvironmentLabel || 'environment'}</strong> container, verifies architecture and GPU compatibility, then starts that service. It requires workspace launch permission.</p>
           </div>
