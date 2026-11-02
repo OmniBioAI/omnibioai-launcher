@@ -1,4 +1,7 @@
 const EventEmitter = require('events');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { TextEncoder, TextDecoder } = require('util');
 global.TextEncoder = TextEncoder;
 global.TextDecoder = TextDecoder;
@@ -21,7 +24,11 @@ jest.mock('http', () => {
   const actual = jest.requireActual('http');
   return { ...actual, request: (options, callback) => mockDockerRequest(options, callback) };
 });
+// Manifests persist under LAUNCHER_STATE_DIR; give this suite its own directory.
+const STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'launcher-state-'));
+process.env.LAUNCHER_STATE_DIR = STATE_DIR;
 const serverModule = require('../server');
+afterAll(() => fs.rmSync(STATE_DIR, { recursive: true, force: true }));
 
 function requestApp(method, url, headers = {}, body) {
   return new Promise((resolve) => {
@@ -82,6 +89,15 @@ function dockerReplySequence(replies) {
 
 
 const GOOD = { Authorization: 'Bearer valid-user-token' };
+
+function storedManifest(identity, workspaceId) {
+  return {
+    schema_version: '1.0', workspace_id: workspaceId, profile: 'generic-python', ide: 'jupyterlab',
+    image: { reference: 'registry.example.test/jupyter:1', digest: `sha256:${'c'.repeat(64)}` },
+    resources: { cpu: 2, memory_bytes: 4 * 1024 ** 3, gpu: 0, architecture: 'amd64' }, objects: [],
+    identity, created_at: '2026-11-01T00:00:00.000Z', launcher_version: '0.1.0', environment: {}, provenance: {},
+  };
+}
 
 // Stubs omnibioai-auth's POST /auth/validate.
 function iamReply(body, { ok = true, error } = {}) {
@@ -281,15 +297,14 @@ describe('launcher Express API', () => {
 
     test('workspace manifests are isolated by both user and organization', async () => {
       const owner = { user_id: 'owner', organization_id: 'org-a' };
-      const key = serverModule.manifestKey(owner, 'private-workspace');
-      serverModule.manifests.set(key, { identity: owner });
+      serverModule.manifests.set(owner, 'private-workspace', storedManifest(owner, 'private-workspace'));
       iamReply({ valid: true, user_id: 'owner', organization_id: 'org-b', permissions: [] });
       expect(await requestApp('GET', '/api/launcher/v1/workspaces/private-workspace/manifest', GOOD)).toMatchObject({ status: 404 });
       iamReply({ valid: true, user_id: 'other', organization_id: 'org-a', permissions: [] });
       expect(await requestApp('GET', '/api/launcher/v1/workspaces/private-workspace/manifest', GOOD)).toMatchObject({ status: 404 });
       iamReply({ valid: true, user_id: 'owner', organization_id: 'org-a', permissions: [] });
       expect(await requestApp('GET', '/api/launcher/v1/workspaces/private-workspace/manifest', GOOD)).toMatchObject({ status: 200 });
-      serverModule.manifests.delete(key);
+      serverModule.manifests.delete(owner, 'private-workspace');
     });
 
     test('a numeric user_id/org_id (the real shape omnibioai-auth/validate returns -- plain SQL integer primary keys, never stored as strings) is accepted, not rejected as lacking org context', async () => {
@@ -399,5 +414,61 @@ describe('launcher API pre-flight and lifecycle fixes', () => {
     expect(byId['generic-r'].compatible_ides).not.toContain('jupyterlab');
     expect(byId.proteomics.compatible_ides).toEqual([]);
     expect(response.body.resource_limits.gpu).toBe(0);
+  });
+});
+
+describe('durable workspace manifests', () => {
+  const ARCH = process.arch === 'arm64' ? 'arm64' : 'amd64';
+  const digest = `sha256:${'d'.repeat(64)}`;
+  const OWNER = { valid: true, user_id: 6, org_id: 1, permissions: ['workspace.launch'] };
+
+  afterEach(() => serverModule.manifests.clear());
+
+  function launchReplies() {
+    dockerReplySequence([
+      { statusCode: 200, body: { Image: digest, Config: { Image: 'registry.example.test/jupyter:1' }, State: { Running: false }, HostConfig: {} } },
+      { statusCode: 200, body: { Architecture: ARCH, RepoDigests: [`registry.example.test/jupyter@${digest}`] } },
+      { statusCode: 200, body: {} },
+      { statusCode: 204, body: {} },
+    ]);
+  }
+  const launchBody = (id) => ({
+    workspace: { profile: 'generic-python', id }, ide: { type: 'jupyterlab' },
+    resources: { cpu: 2, memory_bytes: 4 * 1024 ** 3, gpu: 0, architecture: ARCH },
+  });
+
+  test('a launched workspace manifest is still served after the service restarts', async () => {
+    iamReply(OWNER);
+    launchReplies();
+    expect(await requestApp('POST', '/api/launcher/v1/workspaces', GOOD, launchBody('durable-1'))).toMatchObject({ status: 201 });
+
+    const saved = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'manifests.json'), 'utf8'));
+    expect(saved.manifests).toEqual([expect.objectContaining({ organization_id: '1', user_id: '6', workspace_id: 'durable-1' })]);
+    expect(fs.readdirSync(STATE_DIR).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+
+    // Load a fresh copy of the service from the same state directory.
+    const previousApp = mockApp;
+    try {
+      jest.isolateModules(() => { require('../server'); });
+      const response = await requestApp('GET', '/api/launcher/v1/workspaces/durable-1/manifest', GOOD);
+      expect(response).toMatchObject({ status: 200, body: { workspace_id: 'durable-1', identity: { user_id: '6', organization_id: '1' } } });
+      iamReply({ ...OWNER, user_id: 7 });
+      expect(await requestApp('GET', '/api/launcher/v1/workspaces/durable-1/manifest', GOOD)).toMatchObject({ status: 404 });
+    } finally {
+      mockApp = previousApp;
+    }
+  });
+
+  test('a reused workspace id is still rejected after a restart', async () => {
+    serverModule.manifests.set({ user_id: '6', organization_id: '1' }, 'durable-2', storedManifest({ user_id: '6', organization_id: '1' }, 'durable-2'));
+    const previousApp = mockApp;
+    try {
+      jest.isolateModules(() => { require('../server'); });
+      iamReply(OWNER);
+      launchReplies();
+      expect(await requestApp('POST', '/api/launcher/v1/workspaces', GOOD, launchBody('durable-2'))).toMatchObject({ status: 409 });
+    } finally {
+      mockApp = previousApp;
+    }
   });
 });

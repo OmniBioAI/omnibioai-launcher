@@ -7,6 +7,7 @@ const { listProfiles } = require('./lib/profiles');
 const { limitsFromEnvironment, validateImage, validateWorkspaceRequest } = require('./lib/workspace-spec');
 const { ConfigEnvironmentResolver } = require('./lib/environment-resolver');
 const { createManifest } = require('./lib/manifest');
+const { ManifestStore } = require('./lib/manifest-store');
 const { workspaceRequestFromRun } = require('./lib/run-resolver');
 const app = express();
 
@@ -39,11 +40,11 @@ const CONTROL_PERMISSION = 'platform.manage_infra';
 // working unchanged.
 const WORKSPACE_LAUNCH_PERMISSION = 'workspace.launch';
 const CONTROL_PERMISSIONS = [CONTROL_PERMISSION, WORKSPACE_LAUNCH_PERMISSION];
-const manifests = new Map();
-
-function manifestKey(identity, workspaceId) {
-  return `${identity.organization_id}\u0000${identity.user_id}\u0000${workspaceId}`;
-}
+// LAUNCHER_STATE_DIR must be a persistent volume for manifests to survive a
+// restart; without it they are kept only in this process.
+const LAUNCHER_STATE_DIR = process.env.LAUNCHER_STATE_DIR || '';
+if (!LAUNCHER_STATE_DIR) console.warn('launcher: LAUNCHER_STATE_DIR is not set; workspace manifests will be lost on restart');
+const manifests = new ManifestStore({ dir: LAUNCHER_STATE_DIR });
 
 function authoritativeIdentity(identity) {
   const userId = identity?.user_id ?? identity?.sub ?? identity?.id;
@@ -52,7 +53,7 @@ function authoritativeIdentity(identity) {
   // numbers (they're plain SQL integer primary keys, not stored as
   // strings anywhere) -- accept either a string or a number here rather
   // than demanding the caller's own type already be a string, then
-  // normalize to a string for manifestKey's template-literal key below
+  // normalize to a string for the manifest store's org+user+workspace key
   // (and everything else downstream that was already written assuming
   // a string). 0 is a legitimate id and must not be treated as missing,
   // so the emptiness check below is explicitly on the normalized string
@@ -347,8 +348,7 @@ app.post('/api/launcher/v1/workspaces', requireIdentity(CONTROL_PERMISSIONS), as
     rejectObjects(specification);
     const environment = resolver().resolve(specification);
     const workspaceId = specification.workspace.id || crypto.randomUUID();
-    const storageKey = manifestKey(identity, workspaceId);
-    if (manifests.has(storageKey)) {
+    if (manifests.has(identity, workspaceId)) {
       const error = new Error('workspace id already exists');
       error.status = 409;
       throw error;
@@ -368,7 +368,13 @@ app.post('/api/launcher/v1/workspaces', requireIdentity(CONTROL_PERMISSIONS), as
       error.status = 502;
       throw error;
     }
-    manifests.set(storageKey, manifest);
+    try {
+      manifests.set(identity, workspaceId, manifest);
+    } catch {
+      const error = new Error('workspace started, but its manifest could not be saved');
+      error.status = 503;
+      throw error;
+    }
     res.status(201).json({ workspace_id: workspaceId, status: 'started', manifest });
   } catch (error) { apiError(res, error); }
 });
@@ -376,7 +382,7 @@ app.post('/api/launcher/v1/workspaces', requireIdentity(CONTROL_PERMISSIONS), as
 app.get('/api/launcher/v1/workspaces/:workspaceId/manifest', requireIdentity(), (req, res) => {
   const identity = requireAuthoritativeIdentity(req, res);
   if (!identity) return;
-  const manifest = manifests.get(manifestKey(identity, req.params.workspaceId));
+  const manifest = manifests.get(identity, req.params.workspaceId);
   if (!manifest || manifest.identity.user_id !== identity.user_id || manifest.identity.organization_id !== identity.organization_id) {
     return res.status(404).json({ error: 'workspace manifest not found' });
   }
@@ -395,4 +401,4 @@ app.post('/api/launcher/v1/workspaces/from-run', requireIdentity(CONTROL_PERMISS
 
 app.listen(3001, '0.0.0.0', () => console.log('launcher api listening on 0.0.0.0:3001'));
 
-module.exports = { allocatedGpuCount, app, authoritativeIdentity, dockerResourceUpdate, inspectEnvironment, manifestKey, manifests };
+module.exports = { allocatedGpuCount, app, authoritativeIdentity, dockerResourceUpdate, inspectEnvironment, manifests };
