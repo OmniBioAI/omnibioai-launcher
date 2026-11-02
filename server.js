@@ -339,7 +339,7 @@ function rejectRunning(specification, inspected) {
   if (inspected.container.State?.Running) {
     const label = IDE_LABELS[specification.ide.type] || specification.ide.type;
     const shared = specification.ide.type === 'terminal' || specification.ide.type === 'vscode' ? ' (VS Code and Terminal share one container)' : '';
-    const error = new Error(`${label} is already running${shared}. Its resource settings cannot be changed while it runs: open it from Running services, or stop it and launch again.`);
+    const error = new Error(`${label} is already running${shared}, so its resource settings can't be changed. Open it, or stop it and launch again.`);
     error.status = 409;
     throw error;
   }

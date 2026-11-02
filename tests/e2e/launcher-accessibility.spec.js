@@ -47,7 +47,7 @@ async function auditTextContrast(page) {
     };
     const selectors = [
       '.eyebrow', '.step-number', '.optional-label', '.profile-ide', '.profile-resources', '.ide-choice-copy > span',
-      '.status-badge', '.service-description', '.service-unavailable', '.field-help', '.field-error', '.resource-grid label > span',
+      '.status-badge', '.ide-option-note', '.field-help', '.field-error', '.resource-grid label > span',
       '.resource-grid small', '.advanced-details', '.review-list dt', '.validation-pill', '.resolved-environment > span',
       '.review-objects code', '.security-note', '.launch-panel > p', '.launch-helper', '.workflow-step a', '.object-type',
     ].join(',');
@@ -148,22 +148,50 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
         page.on('request', (request) => {
           if (request.url().endsWith('/v1/workspaces') && request.method() === 'POST') launchRequests += 1;
         });
-        const services = page.getByRole('region', { name: 'Running services' });
+        await expect(page.getByRole('region', { name: 'Running services' })).toHaveCount(0);
+        await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
+        await expect(page.locator('.brand-lockup')).toHaveCount(0);
         const environments = page.getByRole('region', { name: 'Select Environment' });
-        await expect(services.getByRole('button', { name: 'Open ↗' })).toHaveCount(1);
-        await expect(environments.getByRole('button', { name: 'Open ↗' })).toHaveCount(0);
+        const environmentGroup = environments.getByRole('radiogroup', { name: 'Workspace environment' });
+        await expect(environmentGroup.getByRole('radio')).toHaveCount(4);
+        // Only JupyterLab runs in this fixture: exactly one Open, outside every radio.
+        await expect(environments.getByRole('button', { name: /^Open / })).toHaveCount(1);
+        await expect(environments.getByRole('button', { name: 'Open JupyterLab ↗' })).toBeVisible();
+        expect(await environmentGroup.locator('[role="radio"] :is(button, a, input, select, textarea, [tabindex], [role="button"])').count()).toBe(0);
+        await expect(environments.locator('#environment-status-vscode')).toHaveText(await environments.locator('#environment-status-terminal').textContent());
+        await expect(environments.getByText('Shares the VS Code container')).toHaveCount(2);
+        await expect(environments.getByText('Shared with Terminal')).toHaveCount(0);
+
+        // JupyterLab is selected and running: Open is the primary action and
+        // Launch stays disabled even though nothing has been validated yet.
+        const launchPanel = page.locator('#launch-heading');
+        const primaryOpen = launchPanel.getByRole('button', { name: 'Open JupyterLab ↗' });
+        await expect(primaryOpen).toHaveClass(/button--primary/);
+        await expect(launchPanel.getByText(/JupyterLab is already running/)).toBeVisible();
+        await expect(launchPanel.locator('.button--primary')).toHaveCount(1);
 
         const launch = page.getByRole('button', { name: 'Launch Workspace' });
         await expect(launch).toBeDisabled();
         await expect(launch).toHaveAttribute('aria-disabled', 'true');
-        await expect(page.getByText('Validate the configuration to enable launch.')).toBeVisible();
         await expect(launch).toHaveCSS('cursor', 'not-allowed');
-        const disabledStyle = await launch.evaluate((button) => ({
-          background: getComputedStyle(button).backgroundColor,
-          color: getComputedStyle(button).color,
-          surface: getComputedStyle(button.parentElement).backgroundColor,
-        }));
-        expect(disabledStyle.background).not.toBe(disabledStyle.surface);
+        // While the selected IDE runs, Open is the only active action:
+        // Validate (which could only 409) and Launch are both disabled, point
+        // at the notice, and look disabled. Wait out the .button opacity
+        // transition before reading computed styles.
+        const validateButton = launchPanel.getByRole('button', { name: 'Validate configuration' });
+        const look = (button) => button.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { background: style.backgroundColor, borderStyle: style.borderTopStyle, color: style.color };
+        });
+        for (const button of [validateButton, launch]) {
+          await expect(button).toBeDisabled();
+          await expect(button).toHaveAttribute('aria-describedby', 'running-notice');
+          await expect(button).toHaveCSS('opacity', '1');
+          expect((await look(button)).borderStyle).toBe('dashed');
+        }
+        expect(await launchPanel.locator('button:not([disabled])').count()).toBe(1);
+        await validateButton.click({ force: true });
+        await expect(page.getByText('Not validated')).toBeVisible();
         await launch.click({ force: true });
         await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
         expect(launchRequests).toBe(0);
@@ -184,18 +212,83 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
         const jupyter = page.getByRole('radio', { name: /JupyterLab/ });
         await jupyter.focus();
         await page.keyboard.press('ArrowRight');
-        await expect(page.getByRole('radio', { name: /RStudio/ })).toHaveAttribute('aria-checked', 'true');
+        const rstudio = page.getByRole('radio', { name: /RStudio/ });
+        await expect(rstudio).toHaveAttribute('aria-checked', 'true');
+        await expect(rstudio).toBeFocused();
+        await page.keyboard.press('ArrowLeft');
+        await expect(jupyter).toHaveAttribute('aria-checked', 'true');
+        await expect(jupyter).toBeFocused();
+        // Roving tabindex: one Tab stop for the group, then the running card's
+        // Open button, then the next step. Open never changes the selection.
+        await page.keyboard.press('Tab');
+        const cardOpen = environments.getByRole('button', { name: 'Open JupyterLab ↗' });
+        await expect(cardOpen).toBeFocused();
+        await page.keyboard.press('Tab');
+        await expect(page.getByLabel('OmniBioAI object reference')).toBeFocused();
+        await page.keyboard.press('Shift+Tab');
+        await page.keyboard.press('Shift+Tab');
+        await expect(jupyter).toBeFocused();
+        await page.keyboard.press('ArrowRight');
+        await expect(rstudio).toHaveAttribute('aria-checked', 'true');
+        await expect(page.getByText('Validate the configuration to enable launch.')).toBeVisible();
+        await expect(launch).toHaveClass(/button--primary/);
+        // RStudio is stopped: Validate is enabled again and the disabled
+        // Launch must not look like it.
+        await expect(validateButton).toBeEnabled();
+        await expect(validateButton).not.toHaveAttribute('aria-describedby', 'running-notice');
+        await expect(launch).toHaveCSS('opacity', '1');
+        await expect(validateButton).toHaveCSS('opacity', '1');
+        const [disabledLook, enabledLook] = [await look(launch), await look(validateButton)];
+        expect(disabledLook.borderStyle).toBe('dashed');
+        expect(enabledLook.borderStyle).toBe('solid');
+        expect(disabledLook.background).not.toBe(enabledLook.background);
+        expect(disabledLook.color).not.toBe(enabledLook.color);
+        await expect(launchPanel.getByRole('button', { name: /^Open / })).toHaveCount(0);
 
-        const serviceCard = services.locator('.service-card').first();
-        const cardLayout = await serviceCard.evaluate((card) => {
-          const row = card.querySelector('.service-card-heading .ide-choice-icon').getBoundingClientRect();
+        const jupyterCard = environments.locator('.ide-option').first();
+        const cardLayout = await jupyterCard.evaluate((card) => {
+          const radio = card.querySelector('[role="radio"]').getBoundingClientRect();
+          const actions = card.querySelector('.ide-option-actions').getBoundingClientRect();
           const badge = card.querySelector('.status-badge').getBoundingClientRect();
-          const description = card.querySelector('.service-description').getBoundingClientRect();
-          return { rowCenter: row.top + row.height / 2, badgeCenter: badge.top + badge.height / 2, descriptionTop: description.top, descriptionLeft: description.left, cardLeft: card.getBoundingClientRect().left };
+          const open = card.querySelector('.ide-option-open').getBoundingClientRect();
+          return { radioBottom: radio.bottom, radioLeft: radio.left, radioRight: radio.right, actionsTop: actions.top, actionsLeft: actions.left, actionsRight: actions.right, badgeCenter: badge.top + badge.height / 2, openCenter: open.top + open.height / 2 };
         });
-        expect(cardLayout.descriptionTop).toBeGreaterThan(cardLayout.rowCenter);
-        expect(cardLayout.badgeCenter).toBeCloseTo(cardLayout.rowCenter, 0);
-        expect(cardLayout.descriptionLeft).toBeLessThan(cardLayout.cardLeft + 30);
+        expect(cardLayout.actionsTop).toBeGreaterThanOrEqual(cardLayout.radioBottom - 1);
+        expect(cardLayout.actionsLeft).toBeCloseTo(cardLayout.radioLeft, 0);
+        expect(cardLayout.actionsRight).toBeCloseTo(cardLayout.radioRight, 0);
+        expect(Math.abs(cardLayout.badgeCenter - cardLayout.openCenter)).toBeLessThanOrEqual(2);
+        // Every action row is pinned to the bottom of its card; cards sharing
+        // a grid row have their action rows at the same height.
+        const rows = await environments.locator('.ide-option').evaluateAll((cards) => cards.map((card) => {
+          const box = card.getBoundingClientRect();
+          const actions = card.querySelector('.ide-option-actions').getBoundingClientRect();
+          return { cardTop: Math.round(box.top), cardBottom: box.bottom, actionsTop: actions.top, actionsBottom: actions.bottom };
+        }));
+        expect(rows).toHaveLength(4);
+        for (const row of rows) expect(Math.abs(row.actionsBottom - row.cardBottom)).toBeLessThanOrEqual(1);
+        const byGridRow = new Map();
+        for (const row of rows) byGridRow.set(row.cardTop, [...(byGridRow.get(row.cardTop) || []), row.actionsTop]);
+        if (viewport.width > 700) expect(byGridRow.size).toBe(1);
+        for (const tops of byGridRow.values()) expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(1);
+
+        // Advanced resource details: a visible chevron that turns when opened,
+        // and a hover style.
+        const advanced = page.locator('.advanced-details summary');
+        const chevron = () => advanced.evaluate((summary) => {
+          const marker = getComputedStyle(summary, '::before');
+          return { content: marker.content, width: parseFloat(marker.width), border: marker.borderRightStyle, transform: marker.transform };
+        });
+        const closed = await chevron();
+        expect(closed.content).not.toBe('none');
+        expect(closed.width).toBeGreaterThan(0);
+        expect(closed.border).toBe('solid');
+        const restColor = await advanced.evaluate((summary) => getComputedStyle(summary).color);
+        await advanced.hover();
+        await expect.poll(() => advanced.evaluate((summary) => getComputedStyle(summary).color)).not.toBe(restColor);
+        await advanced.click();
+        await expect(page.locator('.advanced-details')).toHaveAttribute('open', '');
+        await expect.poll(async () => (await chevron()).transform).not.toBe(closed.transform);
+        await advanced.click();
 
         const objectInput = page.getByLabel('OmniBioAI object reference');
         await expect(objectInput.locator('xpath=following-sibling::button[normalize-space()="Browse"]')).toBeVisible();
@@ -280,7 +373,8 @@ test('light purple object view, toast, install modal, and embedded header keep t
 
   await page.setContent('<iframe title="Embedded launcher" src="http://127.0.0.1:4303/?obai_theme=light&obai_accent=purple" style="width:100%;height:900px;border:0"></iframe>');
   const embedded = page.frameLocator('iframe');
-  await expect(embedded.getByRole('heading', { name: 'Workspace Launcher' })).toBeVisible();
-  await expect(embedded.locator('.brand-lockup')).toHaveCSS('display', 'none');
+  await expect(embedded.getByRole('heading', { name: 'Workspace Launcher', level: 1 })).toBeVisible();
+  await expect(embedded.getByRole('heading', { level: 1 })).toHaveCount(1);
+  await expect(embedded.locator('.brand-lockup')).toHaveCount(0);
   await page.locator('iframe').screenshot({ path: '/tmp/launcher-polish-embedded-topbar.png' });
 });
