@@ -574,14 +574,15 @@ html[data-embedded="true"] .header { display: none; }
 .ide-choice-copy > span { color: var(--color-text-muted); font-size: 12px; line-height: 1.4; }
 .ide-choice .selection-mark { top: 8px; right: 8px; }
 /* Radio on top, status/Open row below: one card, two siblings, so the Open
-   button is never inside the radio. The row keeps full opacity on an
+   button is never inside the radio. Cards in a row stretch to equal height
+   and the action row is pinned to the bottom, so the rows line up however
+   long the description or note is. The row keeps full opacity on an
    incompatible card because Open still works there. */
-.ide-option { min-width: 0; display: grid; grid-template-rows: 1fr auto; }
-.ide-option .ide-choice { border-radius: var(--radius) var(--radius) 0 0; }
-.ide-option-actions { min-width: 0; min-height: 58px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 10px 6px 14px; border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); background: var(--bg2); }
+.ide-option { min-width: 0; display: flex; flex-direction: column; }
+.ide-option .ide-choice { flex: 1 0 auto; border-radius: var(--radius) var(--radius) 0 0; }
+.ide-option-actions { min-width: 0; min-height: 58px; margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 14px; border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); background: var(--bg2); }
 .ide-option.is-selected .ide-option-actions { border-color: var(--color-accent-border); box-shadow: inset 1px 0 0 var(--color-accent-border), inset -1px -1px 0 var(--color-accent-border); }
 .ide-option-open { margin-left: auto; padding-inline: 14px; }
-.ide-option-note { order: 3; flex-basis: 100%; color: var(--color-text-muted); font-size: 12px; line-height: 1.4; }
 
 .status-badge { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; padding: 3px 7px; border-radius: var(--radius-xs); border: 1px solid var(--border); color: var(--muted); background: var(--color-bg-surface2); font-family: var(--font-mono); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
 .status-badge span { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
@@ -624,6 +625,14 @@ html[data-embedded="true"] .header { display: none; }
 .resource-grid select { height: 44px; }
 .advanced-details { margin-top: 12px; color: var(--muted); font-size: 12px; }
 .advanced-details summary, .manifest-panel summary { min-height: 44px; display: flex; align-items: center; color: var(--color-text-muted); cursor: pointer; }
+/* display: flex drops the native disclosure marker, so draw a chevron that
+   points right when closed and down when open. */
+.advanced-details summary { gap: 9px; margin-inline: -8px; padding-inline: 8px; border-radius: var(--radius-sm); list-style: none; transition: background .15s, color .15s; }
+.advanced-details summary::-webkit-details-marker { display: none; }
+.advanced-details summary::before { content: ''; width: 6px; height: 6px; flex: 0 0 6px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); transition: transform .15s; }
+.advanced-details[open] summary::before { transform: rotate(45deg); }
+.advanced-details summary:hover { background: var(--bg2); color: var(--text); }
+.advanced-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .advanced-details p { margin-top: 8px; line-height: 1.5; }
 
 .review-list { padding: 8px 18px; }
@@ -655,7 +664,10 @@ html[data-embedded="true"] .header { display: none; }
 .button:disabled { opacity: 1; cursor: not-allowed; }
 .button--primary { min-height: 44px; background: var(--accent); border: 1px solid var(--accent); color: var(--on-accent); }
 .button--primary:hover:not(:disabled) { background: color-mix(in srgb, var(--color-accent) 85%, black); }
-.button--primary:disabled, .button--secondary:disabled { background: var(--bg-surface3); border-color: var(--border); color: var(--color-text-muted); opacity: 0.5; border-style: dashed; }
+/* Disabled must read as disabled next to an enabled secondary button in both
+   themes: no fill, a visible dashed outline, muted text. Full opacity keeps
+   the label legible. */
+.button--primary:disabled, .button--secondary:disabled { background: transparent; border: 1px dashed var(--border2); color: var(--color-text-muted); opacity: 1; box-shadow: none; }
 .launch-helper { color: var(--color-text-muted); font-size: 12px; line-height: 1.4; text-align: center; }
 .button--secondary { background: var(--bg2); border: 1px solid var(--border2); color: var(--text-secondary); white-space: nowrap; }
 .button--secondary:hover:not(:disabled), .button--ghost:hover:not(:disabled) { border-color: var(--accent-border); color: var(--accent); }

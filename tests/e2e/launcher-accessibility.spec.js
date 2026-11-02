@@ -159,7 +159,8 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
         await expect(environments.getByRole('button', { name: 'Open JupyterLab ↗' })).toBeVisible();
         expect(await environmentGroup.locator('[role="radio"] :is(button, a, input, select, textarea, [tabindex], [role="button"])').count()).toBe(0);
         await expect(environments.locator('#environment-status-vscode')).toHaveText(await environments.locator('#environment-status-terminal').textContent());
-        await expect(environments.getByText('Shares the VS Code container')).toBeVisible();
+        await expect(environments.getByText('Shares the VS Code container')).toHaveCount(2);
+        await expect(environments.getByText('Shared with Terminal')).toHaveCount(0);
 
         // JupyterLab is selected and running: Open is the primary action and
         // Launch stays disabled even though nothing has been validated yet.
@@ -173,12 +174,22 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
         await expect(launch).toBeDisabled();
         await expect(launch).toHaveAttribute('aria-disabled', 'true');
         await expect(launch).toHaveCSS('cursor', 'not-allowed');
-        const disabledStyle = await launch.evaluate((button) => ({
-          background: getComputedStyle(button).backgroundColor,
-          color: getComputedStyle(button).color,
-          surface: getComputedStyle(button.parentElement).backgroundColor,
-        }));
-        expect(disabledStyle.background).not.toBe(disabledStyle.surface);
+        // Disabled Launch must not look like the enabled Validate beside it
+        // (both are secondary buttons while the selected IDE runs). Wait out
+        // the .button opacity transition before reading computed styles.
+        const validateButton = launchPanel.getByRole('button', { name: 'Validate configuration' });
+        await expect(validateButton).toBeEnabled();
+        await expect(launch).toHaveCSS('opacity', '1');
+        await expect(validateButton).toHaveCSS('opacity', '1');
+        const look = (button) => button.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { background: style.backgroundColor, borderStyle: style.borderTopStyle, color: style.color };
+        });
+        const [disabledLook, enabledLook] = [await look(launch), await look(validateButton)];
+        expect(disabledLook.borderStyle).toBe('dashed');
+        expect(enabledLook.borderStyle).toBe('solid');
+        expect(disabledLook.background).not.toBe(enabledLook.background);
+        expect(disabledLook.color).not.toBe(enabledLook.color);
         await launch.click({ force: true });
         await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
         expect(launchRequests).toBe(0);
@@ -233,6 +244,38 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
         expect(cardLayout.actionsLeft).toBeCloseTo(cardLayout.radioLeft, 0);
         expect(cardLayout.actionsRight).toBeCloseTo(cardLayout.radioRight, 0);
         expect(Math.abs(cardLayout.badgeCenter - cardLayout.openCenter)).toBeLessThanOrEqual(2);
+        // Every action row is pinned to the bottom of its card; cards sharing
+        // a grid row have their action rows at the same height.
+        const rows = await environments.locator('.ide-option').evaluateAll((cards) => cards.map((card) => {
+          const box = card.getBoundingClientRect();
+          const actions = card.querySelector('.ide-option-actions').getBoundingClientRect();
+          return { cardTop: Math.round(box.top), cardBottom: box.bottom, actionsTop: actions.top, actionsBottom: actions.bottom };
+        }));
+        expect(rows).toHaveLength(4);
+        for (const row of rows) expect(Math.abs(row.actionsBottom - row.cardBottom)).toBeLessThanOrEqual(1);
+        const byGridRow = new Map();
+        for (const row of rows) byGridRow.set(row.cardTop, [...(byGridRow.get(row.cardTop) || []), row.actionsTop]);
+        if (viewport.width > 700) expect(byGridRow.size).toBe(1);
+        for (const tops of byGridRow.values()) expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(1);
+
+        // Advanced resource details: a visible chevron that turns when opened,
+        // and a hover style.
+        const advanced = page.locator('.advanced-details summary');
+        const chevron = () => advanced.evaluate((summary) => {
+          const marker = getComputedStyle(summary, '::before');
+          return { content: marker.content, width: parseFloat(marker.width), border: marker.borderRightStyle, transform: marker.transform };
+        });
+        const closed = await chevron();
+        expect(closed.content).not.toBe('none');
+        expect(closed.width).toBeGreaterThan(0);
+        expect(closed.border).toBe('solid');
+        const restColor = await advanced.evaluate((summary) => getComputedStyle(summary).color);
+        await advanced.hover();
+        await expect.poll(() => advanced.evaluate((summary) => getComputedStyle(summary).color)).not.toBe(restColor);
+        await advanced.click();
+        await expect(page.locator('.advanced-details')).toHaveAttribute('open', '');
+        await expect.poll(async () => (await chevron()).transform).not.toBe(closed.transform);
+        await advanced.click();
 
         const objectInput = page.getByLabel('OmniBioAI object reference');
         await expect(objectInput.locator('xpath=following-sibling::button[normalize-space()="Browse"]')).toBeVisible();

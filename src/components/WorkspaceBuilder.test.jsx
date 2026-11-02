@@ -107,7 +107,7 @@ describe('WorkspaceBuilder', () => {
     await userEvent.click(await within(environments).findByRole('button', { name: 'Open VS Code ↗' }));
     expect(onOpenIde).toHaveBeenCalledWith('vscode');
     expect(jupyter).toHaveAttribute('aria-checked', 'true');
-    expect(within(environments).getByRole('radio', { name: /VS Code/ })).toHaveAttribute('aria-checked', 'false');
+    expect(within(environments).getByRole('radio', { name: /^VS Code/ })).toHaveAttribute('aria-checked', 'false');
   });
 
   test('no interactive control is nested inside an environment radio', async () => {
@@ -143,8 +143,15 @@ describe('WorkspaceBuilder', () => {
       expect(badge('terminal')).toHaveTextContent('Starting');
       expect(global.fetch).not.toHaveBeenCalledWith(expect.stringMatching(/\/status\/terminal$/), expect.anything());
     } finally { jest.useRealTimers(); }
-    expect(screen.getByText('Shares the VS Code container')).toBeInTheDocument();
-    expect(screen.getByText('Shared with Terminal')).toBeInTheDocument();
+    // One wording on both cards, inside each card body (not the action row).
+    const notes = screen.getAllByText('Shares the VS Code container');
+    expect(notes).toHaveLength(2);
+    expect(screen.queryByText('Shared with Terminal')).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^VS Code/ })).toContainElement(notes[0]);
+    expect(screen.getByRole('radio', { name: /^Terminal/ })).toContainElement(notes[1]);
+    for (const id of ['jupyterlab', 'rstudio']) {
+      expect(screen.getByRole('radio', { name: new RegExp(id === 'jupyterlab' ? '^JupyterLab' : '^RStudio') })).not.toHaveTextContent('Shares the VS Code container');
+    }
     expect(screen.getByRole('radio', { name: /Terminal/ })).toHaveAccessibleDescription('Starting');
   });
 
@@ -409,6 +416,10 @@ describe('WorkspaceBuilder deployment compatibility', () => {
     expect(launch).not.toHaveClass('button--primary');
     expect(within(panel).getAllByRole('button').filter((button) => button.classList.contains('button--primary'))).toEqual([open]);
     expect(launch).toBeDisabled();
+    expect(launch).toHaveAttribute('disabled');
+    expect(launch).toHaveAttribute('aria-disabled', 'true');
+    await userEvent.click(launch);
+    expect(global.fetch).not.toHaveBeenCalledWith('/api/launcher/v1/workspaces', expect.anything());
     await userEvent.click(validate);
     expect(await screen.findByText('Validated')).toBeInTheDocument();
     expect(launch).toBeDisabled();

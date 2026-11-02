@@ -7,7 +7,7 @@ import { authHeaders } from '../session';
 const ENVIRONMENT_OPTIONS = [
   { id: 'jupyterlab', container: 'jupyter', label: 'JupyterLab', description: 'Interactive notebooks and scientific exploration.', accent: '#f37726', icon: '◉' },
   { id: 'rstudio', container: 'rstudio', label: 'RStudio', description: 'R and Bioconductor development environment.', accent: '#276dc3', icon: 'R' },
-  { id: 'vscode', container: 'vscode', label: 'VS Code', description: 'Browser-based editor for Python, R, and workflows.', accent: '#007acc', icon: '⌁', note: 'Shared with Terminal' },
+  { id: 'vscode', container: 'vscode', label: 'VS Code', description: 'Browser-based editor for Python, R, and workflows.', accent: '#007acc', icon: '⌁', note: 'Shares the VS Code container' },
   { id: 'terminal', container: 'vscode', label: 'Terminal', description: 'Shell access for CLI tools, scripts, and workflows.', accent: '#00e5a0', icon: '>_', note: 'Shares the VS Code container' },
 ];
 const CONTAINERS = [...new Set(ENVIRONMENT_OPTIONS.map((option) => option.container))];
@@ -105,12 +105,12 @@ function EnvironmentCard({ option, selected, onSelect, environmentIds, compatibl
         <span className="ide-choice-copy">
           <strong>{option.label}</strong>
           <span>{option.description}</span>
+          {option.note && <span className="ide-option-note">{option.note}</span>}
           {!compatible && <span className="card-note">Not compatible with {profileName || 'this profile'}</span>}
         </span>
       </div>
       <div className="ide-option-actions">
         <StatusBadge id={statusId} status={status} />
-        {option.note && <span className="ide-option-note">{option.note}</span>}
         {running && <button type="button" className="button button--open ide-option-open" onClick={() => onOpen(option.id)}>Open<span className="sr-only"> {option.label}</span> ↗</button>}
       </div>
     </div>
