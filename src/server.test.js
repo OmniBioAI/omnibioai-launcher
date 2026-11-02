@@ -189,6 +189,7 @@ describe('launcher Express API', () => {
       ['GET', '/api/launcher/status/terminal'], ['POST', '/api/launcher/start/terminal'], ['POST', '/api/launcher/stop/terminal'],
       ['GET', '/api/launcher/v1/profiles'], ['GET', '/api/launcher/v1/workspaces/example/manifest'],
       ['POST', '/api/launcher/v1/workspaces'], ['POST', '/api/launcher/v1/workspaces/from-run'],
+      ['GET', '/api/launcher/ide-access'],
     ];
 
     test('the CORS preflight needs no credentials', async () => {
@@ -414,6 +415,33 @@ describe('launcher API pre-flight and lifecycle fixes', () => {
     expect(byId['generic-r'].compatible_ides).not.toContain('jupyterlab');
     expect(byId.proteomics.compatible_ides).toEqual([]);
     expect(response.body.resource_limits.gpu).toBe(0);
+  });
+});
+
+describe('IDE access gate (router auth_request)', () => {
+  test('allows platform.manage_infra or workspace.launch with a 200', async () => {
+    for (const permissions of [['platform.manage_infra'], ['workspace.launch'], ['dataset.read', 'workspace.launch']]) {
+      iamReply({ valid: true, user_id: 6, org_id: 1, permissions });
+      expect(await requestApp('GET', '/api/launcher/ide-access', GOOD)).toMatchObject({ status: 200, body: { allowed: true } });
+    }
+  });
+
+  test('denies a valid identity holding neither permission with a 403', async () => {
+    for (const permissions of [[], ['dataset.read'], undefined]) {
+      iamReply({ valid: true, user_id: 6, org_id: 1, ...(permissions && { permissions }) });
+      expect(await requestApp('GET', '/api/launcher/ide-access', GOOD)).toMatchObject({ status: 403, body: { error: 'insufficient permissions' } });
+    }
+  });
+
+  test('never reaches Docker, and an IAM outage is a 503 (never a 2xx)', async () => {
+    dockerReply(200, {});
+    iamReply(ADMIN, { error: new Error('connect ECONNREFUSED') });
+    expect(await requestApp('GET', '/api/launcher/ide-access', GOOD)).toMatchObject({ status: 503 });
+    iamReply(ADMIN, { ok: false });
+    expect(await requestApp('GET', '/api/launcher/ide-access', GOOD)).toMatchObject({ status: 503 });
+    iamReply(ADMIN);
+    expect((await requestApp('GET', '/api/launcher/ide-access', GOOD)).status).toBe(200);
+    expect(mockDockerRequest).not.toHaveBeenCalled();
   });
 });
 

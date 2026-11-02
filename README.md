@@ -36,6 +36,7 @@ The default page is the workspace builder. The existing object registry remains 
 | `GET` | `/api/launcher/status/:tool` | Read fixed container status |
 | `POST` | `/api/launcher/start/:tool` | Start a fixed container |
 | `POST` | `/api/launcher/stop/:tool` | Stop a fixed container |
+| `GET` | `/api/launcher/ide-access` | IDE access check for Studio's router `auth_request`: `200` with `workspace.launch` or `platform.manage_infra`, `401`/`403` otherwise, `503` if IAM is unreachable |
 
 The legacy `tool` values remain `jupyter`, `rstudio`, and `vscode`; those routes and response shapes are unchanged. Terminal uses the same lifecycle route shape with `tool=terminal` and resolves to the existing VS Code Server container.
 

@@ -280,6 +280,14 @@ app.post('/api/launcher/stop/:tool', requireIdentity(CONTROL_PERMISSIONS), lifec
 // intentionally doesn't depend on IAM or Docker being available.
 app.get('/api/launcher/health', (_req, res) => res.json({ status: 'ok' }));
 
+// Studio's router gates /jupyter/, /rstudio/ and /vscode/ with an nginx
+// auth_request to this route. Opening a shared IDE needs the same authority as
+// launching one, so this is exactly the lifecycle permission check: 200 allows;
+// 401 (no or invalid token) and 403 (neither permission) deny; an unreachable
+// IAM is 503, which nginx also treats as a denial. The router caches only
+// 200/401/403, so an outage is never cached as an allow.
+app.get('/api/launcher/ide-access', requireIdentity(CONTROL_PERMISSIONS), (_req, res) => res.json({ allowed: true }));
+
 // Run -> Debug needs an authoritative run metadata resolver AND a run
 // authorizer. Neither service contract exists in this deployment, so both stay
 // unset: the from-run route fails closed with 501 and /v1/profiles reports
