@@ -278,6 +278,9 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
   const [runReference, setRunReference] = useState('');
   const [debugMessage, setDebugMessage] = useState('');
   const [debugging, setDebugging] = useState(false);
+  // Hidden unless the server says its run resolver and authorizer are wired;
+  // an older server without the flag also keeps it hidden.
+  const [debugFromRunAvailable, setDebugFromRunAvailable] = useState(false);
   const launchInFlight = useRef(false);
   const latestRequestFingerprint = useRef('');
 
@@ -317,6 +320,7 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
         const available = Array.isArray(payload.profiles) ? payload.profiles : [];
         setProfiles(available);
         setLimits(payload.resource_limits || null);
+        setDebugFromRunAvailable(payload.features?.debug_from_run === true);
         if (available.length) {
           const usable = available.filter(profileIsAvailable);
           const initial = usable.find((profile) => profile.id === 'generic-python') || usable[0] || available[0];
@@ -519,11 +523,11 @@ export default function WorkspaceBuilder({ baseUrl, onBrowseObjects, onOpenIde, 
             <details className="advanced-details"><summary>Advanced resource details</summary><p>Server limits: up to {resourceMax.cpu} CPU, {formatMemory(resourceMax.memory_bytes)} memory, and {resourceMax.gpu} requested GPUs. Docker compatibility and actual GPU allocation are verified server-side.</p></details>
           </section>
 
-          <section className="config-panel debug-panel" aria-labelledby="debug-heading">
+          {debugFromRunAvailable && <section className="config-panel debug-panel" aria-labelledby="debug-heading">
             <div className="panel-heading"><div><span className="step-number">◇</span><h2 id="debug-heading">Debug from Run</h2></div><span className="optional-label">Deployment dependent</span></div>
             <div className="object-input-row"><label className="sr-only" htmlFor="run-reference">Run reference</label><input id="run-reference" value={runReference} onChange={(event) => setRunReference(event.target.value)} placeholder="omnibioai://run/<id>" /><button type="button" className="button button--secondary" disabled={debugging} onClick={debugFromRun}>{debugging ? 'Checking…' : 'Debug from Run'}</button></div>
             {debugMessage && <p className="field-help" role="status">{debugMessage}</p>}
-          </section>
+          </section>}
         </div>
 
         <div className="workspace-review-column">

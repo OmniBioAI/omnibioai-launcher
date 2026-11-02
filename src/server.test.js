@@ -417,6 +417,39 @@ describe('launcher API pre-flight and lifecycle fixes', () => {
   });
 });
 
+describe('Debug from Run capability', () => {
+  const RUN = { run_reference: 'omnibioai://run/run-42' };
+  beforeEach(() => { iamReply({ valid: true, user_id: 6, org_id: 1, permissions: ['workspace.launch'] }); });
+  afterEach(() => { serverModule.runIntegration.resolver = undefined; serverModule.runIntegration.authorize = undefined; });
+
+  test('profiles report debug_from_run = false and from-run stays 501 when nothing is configured', async () => {
+    expect((await requestApp('GET', '/api/launcher/v1/profiles', GOOD)).body.features).toEqual({ debug_from_run: false });
+    expect(await requestApp('POST', '/api/launcher/v1/workspaces/from-run', GOOD, RUN)).toMatchObject({ status: 501 });
+  });
+
+  test('the flag needs BOTH a real resolver and an authorizer', async () => {
+    const { RunMetadataResolver } = require('../lib/run-resolver');
+    serverModule.runIntegration.authorize = async () => true;
+    expect(serverModule.debugFromRunEnabled()).toBe(false);
+    serverModule.runIntegration.resolver = new RunMetadataResolver();
+    expect(serverModule.debugFromRunEnabled()).toBe(false);
+    serverModule.runIntegration.authorize = undefined;
+    serverModule.runIntegration.resolver = { resolve: async () => ({}) };
+    expect(serverModule.debugFromRunEnabled()).toBe(false);
+    expect(await requestApp('POST', '/api/launcher/v1/workspaces/from-run', GOOD, RUN)).toMatchObject({ status: 501 });
+    serverModule.runIntegration.authorize = async () => true;
+    expect((await requestApp('GET', '/api/launcher/v1/profiles', GOOD)).body.features).toEqual({ debug_from_run: true });
+  });
+
+  test('a configured authorizer that denies still fails closed with 403', async () => {
+    const resolve = jest.fn();
+    serverModule.runIntegration.resolver = { resolve };
+    serverModule.runIntegration.authorize = async () => false;
+    expect(await requestApp('POST', '/api/launcher/v1/workspaces/from-run', GOOD, RUN)).toMatchObject({ status: 403 });
+    expect(resolve).not.toHaveBeenCalled();
+  });
+});
+
 describe('durable workspace manifests', () => {
   const ARCH = process.arch === 'arm64' ? 'arm64' : 'amd64';
   const digest = `sha256:${'d'.repeat(64)}`;

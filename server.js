@@ -8,7 +8,7 @@ const { limitsFromEnvironment, validateImage, validateWorkspaceRequest } = requi
 const { ConfigEnvironmentResolver } = require('./lib/environment-resolver');
 const { createManifest } = require('./lib/manifest');
 const { ManifestStore } = require('./lib/manifest-store');
-const { workspaceRequestFromRun } = require('./lib/run-resolver');
+const { RunMetadataResolver, workspaceRequestFromRun } = require('./lib/run-resolver');
 const app = express();
 
 app.use(express.json({ limit: '64kb', strict: true }));
@@ -280,6 +280,19 @@ app.post('/api/launcher/stop/:tool', requireIdentity(CONTROL_PERMISSIONS), lifec
 // intentionally doesn't depend on IAM or Docker being available.
 app.get('/api/launcher/health', (_req, res) => res.json({ status: 'ok' }));
 
+// Run -> Debug needs an authoritative run metadata resolver AND a run
+// authorizer. Neither service contract exists in this deployment, so both stay
+// unset: the from-run route fails closed with 501 and /v1/profiles reports
+// features.debug_from_run = false so the UI hides the panel. Wiring a real
+// resolver and authorizer here is what turns the feature on.
+const runIntegration = { resolver: undefined, authorize: undefined };
+
+function debugFromRunEnabled() {
+  const { resolver: runResolver, authorize } = runIntegration;
+  return typeof authorize === 'function' && typeof runResolver?.resolve === 'function' &&
+    !(runResolver instanceof RunMetadataResolver);
+}
+
 // Versioned workspace APIs are additive. Legacy lifecycle routes above retain
 // their exact behavior for existing Studio consumers.
 app.get('/api/launcher/v1/profiles', requireIdentity(), (req, res) => {
@@ -298,6 +311,7 @@ app.get('/api/launcher/v1/profiles', requireIdentity(), (req, res) => {
   res.json({
     profiles,
     resource_limits: { ...limits, gpu: Math.min(limits.gpu, environments.maxGpuAvailable()) },
+    features: { debug_from_run: debugFromRunEnabled() },
   });
 });
 
@@ -394,11 +408,11 @@ app.post('/api/launcher/v1/workspaces/from-run', requireIdentity(CONTROL_PERMISS
   if (!identity) return;
   try {
     if (!req.body || Object.keys(req.body).some((key) => key !== 'run_reference')) throw new ValidationError('request must contain only run_reference');
-    await workspaceRequestFromRun(req.body.run_reference, {});
+    await workspaceRequestFromRun(req.body.run_reference, runIntegration);
     res.status(500).json({ error: 'unexpected run resolver response' });
   } catch (error) { apiError(res, error); }
 });
 
 app.listen(3001, '0.0.0.0', () => console.log('launcher api listening on 0.0.0.0:3001'));
 
-module.exports = { allocatedGpuCount, app, authoritativeIdentity, dockerResourceUpdate, inspectEnvironment, manifests };
+module.exports = { allocatedGpuCount, app, authoritativeIdentity, debugFromRunEnabled, dockerResourceUpdate, inspectEnvironment, manifests, runIntegration };

@@ -119,7 +119,7 @@ Manifests are keyed by organization + user + workspace id. When `LAUNCHER_STATE_
 
 ### Run to Debug Workspace
 
-`POST /api/launcher/v1/workspaces/from-run` defines the authenticated contract with a single `run_reference`. The implemented boundary strictly parses a `run` URI and requires an authorization callback before metadata resolution. No authoritative run authorization or metadata contract exists in this repository, so the HTTP route currently returns `501` and never fabricates run metadata.
+`POST /api/launcher/v1/workspaces/from-run` defines the authenticated contract with a single `run_reference`. The implemented boundary strictly parses a `run` URI and requires an authorization callback before metadata resolution. No authoritative run authorization or metadata contract exists in this repository, so the HTTP route currently returns `501` and never fabricates run metadata. `GET /api/launcher/v1/profiles` reports `features.debug_from_run`, which is `true` only when both a run resolver and an authorizer are configured in `server.js`; the UI hides the Debug from Run panel otherwise.
 
 Planned flow:
 

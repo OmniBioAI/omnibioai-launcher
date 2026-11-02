@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import WorkspaceBuilder from './WorkspaceBuilder';
 
@@ -224,9 +224,26 @@ describe('WorkspaceBuilder', () => {
     expect(screen.queryByText(/api_key/)).not.toBeInTheDocument();
   });
 
+  test('hides Debug from Run unless the server reports the run integration is configured', async () => {
+    installFetch();
+    await renderLoaded();
+    expect(screen.queryByRole('heading', { name: 'Debug from Run' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Run reference')).not.toBeInTheDocument();
+    cleanup();
+
+    installFetch({ profiles: { profiles: PROFILES, resource_limits: LIMITS, features: { debug_from_run: false } } });
+    await renderLoaded();
+    expect(screen.queryByLabelText('Run reference')).not.toBeInTheDocument();
+    cleanup();
+
+    installFetch({ profiles: { profiles: PROFILES, resource_limits: LIMITS, features: { debug_from_run: true } } });
+    await renderLoaded();
+    expect(screen.getByRole('heading', { name: 'Debug from Run' })).toBeInTheDocument();
+  });
+
   test('handles Debug-from-Run malformed input and unavailable 501 integration truthfully', async () => {
     const debug = jest.fn(() => jsonResponse({ error: 'run authorization integration is not configured' }, 501));
-    installFetch({ debug });
+    installFetch({ debug, profiles: { profiles: PROFILES, resource_limits: LIMITS, features: { debug_from_run: true } } });
     await renderLoaded();
     const input = screen.getByLabelText('Run reference');
     await userEvent.type(input, 'omnibioai://dataset/not-a-run');
