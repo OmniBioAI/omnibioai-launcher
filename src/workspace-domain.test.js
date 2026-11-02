@@ -128,6 +128,34 @@ describe('environment resolution', () => {
     expect(() => resolver.resolve(validateWorkspaceRequest(request({ workspace: { profile: 'rna-seq' }, resources: { cpu: 1, memory_bytes: 512 * 1024 ** 2, gpu: 0, architecture: 'arm64' } }), { identity }))).toThrow(/no compatible/);
   });
 
+  test('explains which constraint ruled out every environment', () => {
+    const candidate = {
+      id: 'python-a', ide: 'jupyterlab', container: 'omnibioai-jupyter', architectures: ['arm64'],
+      capabilities: ['python'], gpu_available: 0, environment: {},
+    };
+    const resolver = new ConfigEnvironmentResolver([candidate]);
+    const spec = (overrides) => validateWorkspaceRequest(request({ resources: { cpu: 1, memory_bytes: 512 * 1024 ** 2, gpu: 0, architecture: 'arm64' }, ...overrides }), { identity });
+    expect(() => resolver.resolve(spec({ workspace: { profile: 'rna-seq' } }))).toThrow(/does not support the RNA-seq profile \(missing: rna-seq\)/);
+    expect(() => resolver.resolve(spec({ resources: { cpu: 1, memory_bytes: 512 * 1024 ** 2, gpu: 0, architecture: 'amd64' } }))).toThrow(/no jupyterlab environment is available for amd64/);
+    expect(() => resolver.resolve(spec({ resources: { cpu: 1, memory_bytes: 512 * 1024 ** 2, gpu: 2, architecture: 'arm64' } }))).toThrow(/requested 2 GPU\(s\) but the jupyterlab environment has 0/);
+    expect(() => resolver.resolve(spec({ ide: { type: 'rstudio' } }))).toThrow(/no rstudio environment is configured/);
+  });
+
+  test('default environments satisfy every profile whose packages the images ship', () => {
+    const resolver = new ConfigEnvironmentResolver();
+    expect(resolver.compatibleIdes('generic-python')).toEqual(expect.arrayContaining(['jupyterlab', 'vscode', 'terminal']));
+    expect(resolver.compatibleIdes('generic-r')).toEqual(expect.arrayContaining(['rstudio', 'vscode', 'terminal']));
+    for (const profile of ['rna-seq', 'single-cell', 'variant-analysis']) {
+      expect(resolver.compatibleIdes(profile)).toContain('jupyterlab');
+      const spec = validateWorkspaceRequest(request({ workspace: { profile }, ide: { type: 'jupyterlab' }, resources: { cpu: 1, memory_bytes: 512 * 1024 ** 2, gpu: 0 } }), { identity });
+      expect(resolver.resolve(spec).container).toBe('omnibioai-jupyter');
+    }
+    // No image ships proteomics or ML tooling, so these stay unavailable.
+    expect(resolver.compatibleIdes('proteomics')).toEqual([]);
+    expect(resolver.compatibleIdes('ml-ai-development')).toEqual([]);
+    expect(resolver.maxGpuAvailable()).toBe(0);
+  });
+
   test('resolves Terminal through the fixed VS Code workspace container', () => {
     const spec = validateWorkspaceRequest(request({
       ide: { type: 'terminal' },

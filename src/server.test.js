@@ -324,3 +324,68 @@ describe('launcher Express API', () => {
     });
   });
 });
+
+describe('launcher API pre-flight and lifecycle fixes', () => {
+  const ARCH = process.arch === 'arm64' ? 'arm64' : 'amd64';
+  const digest = `sha256:${'b'.repeat(64)}`;
+  const body = (overrides = {}) => ({
+    workspace: { profile: 'generic-python' }, ide: { type: 'jupyterlab' },
+    resources: { cpu: 2, memory_bytes: 4 * 1024 ** 3, gpu: 0, architecture: ARCH }, ...overrides,
+  });
+  const container = (running) => ({ statusCode: 200, body: { Image: digest, Config: { Image: 'registry.example.test/jupyter:1' }, State: { Running: running }, HostConfig: {} } });
+  const image = { statusCode: 200, body: { Architecture: ARCH, RepoDigests: [`registry.example.test/jupyter@${digest}`] } };
+
+  beforeEach(() => { iamReply({ valid: true, user_id: 6, org_id: 1, permissions: ['workspace.launch'] }); });
+
+  test('validate rejects a configuration whose shared container is already running', async () => {
+    dockerReplySequence([container(true), image]);
+    const response = await requestApp('POST', '/api/launcher/v1/workspaces/validate', GOOD, body());
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatch(/JupyterLab is already running/);
+  });
+
+  test('validate passes when the container is stopped and compatible', async () => {
+    dockerReplySequence([container(false), image]);
+    const response = await requestApp('POST', '/api/launcher/v1/workspaces/validate', GOOD, body());
+    expect(response).toMatchObject({ status: 200, body: { environment: { ide: 'jupyterlab' } } });
+  });
+
+  test('validate rejects attached objects up front, the same as launch, without touching Docker', async () => {
+    dockerReply(200, {});
+    const response = await requestApp('POST', '/api/launcher/v1/workspaces/validate', GOOD, body({ objects: ['omnibioai://dataset/abc'] }));
+    expect(response.status).toBe(501);
+    expect(response.body.error).toMatch(/remove the attached objects/);
+    expect(mockDockerRequest).not.toHaveBeenCalled();
+  });
+
+  test('validate reports an unreachable container runtime as 503, not a generic 500', async () => {
+    dockerReply(500, {}, new Error('ENOENT'));
+    const response = await requestApp('POST', '/api/launcher/v1/workspaces/validate', GOOD, body());
+    expect(response.status).toBe(503);
+  });
+
+  test('RNA-seq validates against the default Jupyter environment', async () => {
+    dockerReplySequence([container(false), image]);
+    const response = await requestApp('POST', '/api/launcher/v1/workspaces/validate', GOOD, body({ workspace: { profile: 'rna-seq' } }));
+    expect(response.status).toBe(200);
+  });
+
+  test('start/stop surface Docker errors instead of reporting ok', async () => {
+    dockerReply(404, { message: 'No such container: omnibioai-rstudio' });
+    expect(await requestApp('POST', '/api/launcher/start/rstudio', GOOD)).toMatchObject({ status: 404 });
+    dockerReply(500, { message: 'driver failed' });
+    expect(await requestApp('POST', '/api/launcher/stop/rstudio', GOOD)).toMatchObject({ status: 502, body: { error: expect.stringMatching(/driver failed/) } });
+    dockerReply(304, '');
+    expect(await requestApp('POST', '/api/launcher/start/jupyter', GOOD)).toMatchObject({ status: 200, body: { ok: true, unchanged: true } });
+  });
+
+  test('profiles list compatible IDEs and cap GPUs at what environments provide', async () => {
+    const response = await requestApp('GET', '/api/launcher/v1/profiles', GOOD);
+    expect(response.status).toBe(200);
+    const byId = Object.fromEntries(response.body.profiles.map((profile) => [profile.id, profile]));
+    expect(byId['rna-seq'].compatible_ides).toContain('jupyterlab');
+    expect(byId['generic-r'].compatible_ides).not.toContain('jupyterlab');
+    expect(byId.proteomics.compatible_ides).toEqual([]);
+    expect(response.body.resource_limits.gpu).toBe(0);
+  });
+});

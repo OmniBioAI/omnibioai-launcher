@@ -170,7 +170,14 @@ function allocatedGpuCount(container) {
 }
 
 async function inspectEnvironment(candidate, requestedArchitecture, requestedGpu = 0) {
-  const container = await dockerRequest('GET', `/containers/${candidate.container}/json`);
+  let container;
+  try {
+    container = await dockerRequest('GET', `/containers/${candidate.container}/json`);
+  } catch {
+    const error = new Error('the container runtime is unreachable, so the workspace environment could not be inspected');
+    error.status = 503;
+    throw error;
+  }
   if (container.status === 404) {
     const error = new Error('configured workspace container does not exist');
     error.status = 422;
@@ -231,27 +238,29 @@ app.get('/api/launcher/status/:tool', requireIdentity(), async (req, res) => {
   }
 });
 
-app.post('/api/launcher/start/:tool', requireIdentity(CONTROL_PERMISSIONS), async (req, res) => {
-  const tool = TOOLS[req.params.tool];
-  if (!tool) return res.status(400).json({ error: 'unknown tool' });
-  try {
-    await dockerRequest('POST', `/containers/${tool.container}/start`);
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+// Docker answers start/stop with 204 (done) or 304 (already in that state).
+// dockerRequest resolves for every HTTP status, so these routes used to report
+// { ok: true } even when Docker returned 404 (no such container) or 500.
+function lifecycleRoute(action) {
+  return async (req, res) => {
+    const tool = TOOLS[req.params.tool];
+    if (!tool) return res.status(400).json({ error: 'unknown tool' });
+    try {
+      const result = await dockerRequest('POST', `/containers/${tool.container}/${action}`);
+      if (result.status === 404) return res.status(404).json({ error: `${tool.container} container does not exist` });
+      if (result.status >= 400) {
+        const detail = typeof result.body?.message === 'string' ? `: ${result.body.message}` : '';
+        return res.status(502).json({ error: `could not ${action} ${tool.container}${detail}` });
+      }
+      res.json({ ok: true, ...(result.status === 304 && { unchanged: true }) });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  };
+}
 
-app.post('/api/launcher/stop/:tool', requireIdentity(CONTROL_PERMISSIONS), async (req, res) => {
-  const tool = TOOLS[req.params.tool];
-  if (!tool) return res.status(400).json({ error: 'unknown tool' });
-  try {
-    await dockerRequest('POST', `/containers/${tool.container}/stop`);
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.post('/api/launcher/start/:tool', requireIdentity(CONTROL_PERMISSIONS), lifecycleRoute('start'));
+app.post('/api/launcher/stop/:tool', requireIdentity(CONTROL_PERMISSIONS), lifecycleRoute('stop'));
 
 // Small liveness endpoint reachable through nginx's /api/launcher proxy. It
 // intentionally doesn't depend on IAM or Docker being available.
@@ -260,15 +269,59 @@ app.get('/api/launcher/health', (_req, res) => res.json({ status: 'ok' }));
 // Versioned workspace APIs are additive. Legacy lifecycle routes above retain
 // their exact behavior for existing Studio consumers.
 app.get('/api/launcher/v1/profiles', requireIdentity(), (req, res) => {
-  res.json({ profiles: listProfiles(), resource_limits: limitsFromEnvironment() });
+  let environments;
+  try { environments = resolver(); } catch (error) { return apiError(res, error); }
+  const limits = limitsFromEnvironment();
+  // Each profile carries the IDEs that can actually satisfy it, so the UI can
+  // disable profiles/environments that would only ever fail validation. The
+  // advertised GPU ceiling is capped by what any configured environment can
+  // provide: offering 8 GPUs when every candidate has 0 just guarantees a
+  // validation failure.
+  const profiles = listProfiles().map((profile) => ({
+    ...profile,
+    compatible_ides: environments.compatibleIdes(profile.id),
+  }));
+  res.json({
+    profiles,
+    resource_limits: { ...limits, gpu: Math.min(limits.gpu, environments.maxGpuAvailable()) },
+  });
 });
 
-app.post('/api/launcher/v1/workspaces/validate', requireIdentity(), (req, res) => {
+const IDE_LABELS = Object.freeze({ jupyterlab: 'JupyterLab', rstudio: 'RStudio', vscode: 'VS Code', terminal: 'Terminal' });
+
+function rejectObjects(specification) {
+  // An object identifier is context, never authority. Until an authoritative
+  // object-access contract is configured, object-aware provisioning denies.
+  if (specification.objects.length) {
+    const error = new Error('attaching OmniBioAI objects is not available yet in this deployment (object authorization integration is not configured); remove the attached objects to launch');
+    error.status = 501;
+    throw error;
+  }
+}
+
+function rejectRunning(specification, inspected) {
+  if (inspected.container.State?.Running) {
+    const label = IDE_LABELS[specification.ide.type] || specification.ide.type;
+    const shared = specification.ide.type === 'terminal' || specification.ide.type === 'vscode' ? ' (VS Code and Terminal share one container)' : '';
+    const error = new Error(`${label} is already running${shared}. Its resource settings cannot be changed while it runs: open it from Running services, or stop it and launch again.`);
+    error.status = 409;
+    throw error;
+  }
+}
+
+// Validation runs the same pre-flight checks as launch (objects, environment
+// resolution, image/architecture/GPU inspection, running-container conflict).
+// Previously validate only checked the request shape, so "Validated" was
+// routinely followed by a launch that could never succeed.
+app.post('/api/launcher/v1/workspaces/validate', requireIdentity(), async (req, res) => {
   const identity = requireAuthoritativeIdentity(req, res);
   if (!identity) return;
   try {
     const specification = validateWorkspaceRequest(req.body, { identity, launcherVersion: LAUNCHER_VERSION });
+    rejectObjects(specification);
     const environment = resolver().resolve(specification);
+    const inspected = await inspectEnvironment(environment, specification.resources.architecture, specification.resources.gpu);
+    rejectRunning(specification, inspected);
     res.json({ specification, environment: { id: environment.id, ide: environment.ide, architectures: environment.architectures, capabilities: environment.capabilities, gpu_available: environment.gpu_available } });
   } catch (error) { apiError(res, error); }
 });
@@ -278,13 +331,7 @@ app.post('/api/launcher/v1/workspaces', requireIdentity(CONTROL_PERMISSIONS), as
   if (!identity) return;
   try {
     const specification = validateWorkspaceRequest(req.body, { identity, launcherVersion: LAUNCHER_VERSION });
-    // An object identifier is context, never authority. Until an authoritative
-    // object-access contract is configured, object-aware provisioning denies.
-    if (specification.objects.length) {
-      const error = new Error('object authorization integration is not configured');
-      error.status = 501;
-      throw error;
-    }
+    rejectObjects(specification);
     const environment = resolver().resolve(specification);
     const workspaceId = specification.workspace.id || crypto.randomUUID();
     const storageKey = manifestKey(identity, workspaceId);
@@ -295,11 +342,7 @@ app.post('/api/launcher/v1/workspaces', requireIdentity(CONTROL_PERMISSIONS), as
     }
     const inspected = await inspectEnvironment(environment, specification.resources.architecture, specification.resources.gpu);
     const manifest = createManifest({ spec: specification, environment, workspaceId, image: inspected.image });
-    if (inspected.container.State?.Running) {
-      const error = new Error('resource settings cannot be changed while the shared workspace container is running');
-      error.status = 409;
-      throw error;
-    }
+    rejectRunning(specification, inspected);
     const updated = await dockerRequest('POST', `/containers/${environment.container}/update`, dockerResourceUpdate(specification.resources));
     if (updated.status < 200 || updated.status >= 300) {
       const error = new Error('workspace resource limits could not be applied');
