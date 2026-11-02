@@ -892,20 +892,25 @@ function App() {
     return () => document.removeEventListener('keydown', onDialogKeyDown);
   }, [objectPickerOpen]);
 
+  // Electron (Studio desktop): the <webview> host forwards 'open-external' IPC
+  // to the OS browser. Web (Studio's iframe, or this page opened directly):
+  // open a new tab. The previous web fallback posted { type: 'open-external' }
+  // to window.parent, but Studio's web ServiceViewer only listens for the
+  // embed-ready event, so every "Open" click in the browser did nothing.
+  // window.open runs inside the click handler, so popup blockers allow it, and
+  // Studio's iframe has no sandbox attribute that would block popups.
   const openUrl = (url) => {
-    console.log('[Launcher] openUrl called with:', url);
+    if (!url) return;
     if (window.require) {
       try {
         const { ipcRenderer } = window.require('electron');
-        console.log('[Launcher] using ipcRenderer.sendToHost');
         ipcRenderer.sendToHost('open-external', url);
         return;
-      } catch(e) {
-        console.log('[Launcher] ipcRenderer failed:', e.message);
+      } catch {
+        // Not actually Electron; fall through to the web path.
       }
     }
-    console.log('[Launcher] using postMessage fallback');
-    window.parent.postMessage({ type: 'open-external', url }, '*');
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const objectId = urlObjectId || selectedObject?.object_id || null;

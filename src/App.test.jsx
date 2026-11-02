@@ -24,7 +24,7 @@ describe('App', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/?view=objects');
     installFetch();
-    jest.spyOn(window.parent, 'postMessage').mockImplementation(() => {});
+    jest.spyOn(window, 'open').mockImplementation(() => null);
   });
   afterEach(() => jest.restoreAllMocks());
 
@@ -50,7 +50,7 @@ describe('App', () => {
     });
     render(<App />);
     await userEvent.click(await screen.findByRole('button', { name: 'Open ↗' }));
-    expect(window.parent.postMessage).toHaveBeenCalledWith({ type: 'open-external', url: `${window.location.origin}/jupyter/` }, '*');
+    expect(window.open).toHaveBeenCalledWith(`${window.location.origin}/jupyter/`, '_blank', 'noopener,noreferrer');
     expect(global.fetch).toHaveBeenCalledWith('/_svc/sdk/api/launcher/v1/profiles', expect.any(Object));
   });
 
@@ -129,9 +129,7 @@ describe('App', () => {
     render(<App />);
     expect(await screen.findByText('TCGA-BRCA RNAseq cohort 2024')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /R \/ RStudio Open RStudio/ }));
-    expect(window.parent.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'open-external', url: `${window.location.origin}/rstudio/` }), '*'
-    );
+    expect(window.open).toHaveBeenCalledWith(`${window.location.origin}/rstudio/`, '_blank', 'noopener,noreferrer');
 
     cleanup();
     window.history.replaceState({}, '', '/?object_id=real-ok');
@@ -215,11 +213,11 @@ describe('App', () => {
     cleanup();
     window.history.replaceState({}, '', '/?object_id=test');
     global.fetch.mockResolvedValue({ ok: true, json: async () => object });
-    const open = jest.spyOn(window.parent, 'postMessage').mockImplementation(() => {});
+    const open = jest.spyOn(window, 'open').mockImplementation(() => null);
     render(<App />);
     expect(await screen.findByText('TCGA-BRCA RNAseq cohort 2024')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /VS Code Open VS Code/ }));
-    expect(open).toHaveBeenCalledWith(expect.objectContaining({ url: `${window.location.origin}/vscode/` }), '*');
+    expect(open).toHaveBeenCalledWith(`${window.location.origin}/vscode/`, '_blank', 'noopener,noreferrer');
 
     cleanup();
     window.history.replaceState({}, '', '/?object_id=test');
