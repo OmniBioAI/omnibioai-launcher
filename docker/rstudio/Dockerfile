@@ -5,6 +5,14 @@
 # Pin the upstream multi-platform index; both native amd64 and arm64 children
 # are present in this digest.
 FROM rocker/rstudio@sha256:2f48314dfffab8ac2e1bc1797b0564b1f96927f702c064ab2cc69ce1b1c62016
+# FOLLOW-UP (Studio feat/rstudio-sso): Studio runs RStudio with ROOT=FALSE and
+# no login, so users have no sudo and can't apt-get install the system
+# libraries that R packages build against. They must be in this image:
+#   - libmagick++-dev (magick) is not installed below yet; add it.
+#   - libxml2-dev (xml2) and libgdal-dev (sf, terra) are below, but the
+#     image the DGX runs (omnibioai-rstudio:prepin-20261027) was not built
+#     from this file and has neither, nor libgit2-dev, libhdf5-dev or
+#     libglpk-dev. Rebuild and re-pin it to get them.
 # Required by the R/Bioconductor packages installed below (zlib/png/fontconfig/
 # freetype/cairo for graphics packages, libxml2 for xml2, libgit2 for gert);
 # without these headers the source builds below fail silently under
