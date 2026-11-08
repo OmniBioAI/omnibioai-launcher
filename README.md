@@ -11,6 +11,13 @@ OmniBioAI object or workspace request
 
 Launcher is not Studio, an IAM service, a workflow engine, a registry, TES, ToolServer, RAG, or a dependency solver. Those systems remain authoritative for their own data and authorization decisions.
 
+## Architecture
+
+OmniBioAI Launcher provides authenticated, policy-constrained
+access to configured scientific workspace environments.
+
+![OmniBioAI Launcher Architecture](docs/architecture/omnibioai-launcher-architecture-diagram.png)
+
 ## Architecture inventory
 
 - **Frontend:** Create React App / React 18 single-page UI. It browses Studio-owned `/api/dev/objects/*` routes, displays object details and lineage, opens JupyterLab/RStudio/VS Code or the workspace Terminal, and exposes progressive workspace profile/resource controls.
