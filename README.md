@@ -16,7 +16,7 @@ Launcher is not Studio, an IAM service, a workflow engine, a registry, TES, Tool
 OmniBioAI Launcher provides authenticated, policy-constrained
 access to configured scientific workspace environments.
 
-![OmniBioAI Launcher Architecture](docs/architecture/omnibioai-launcher-architecture-diagram.png)
+![OmniBioAI Launcher Architecture](docs/architecture/omnibioai-launcher-architecture.png)
 
 ## Architecture inventory
 
